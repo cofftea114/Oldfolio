@@ -53,8 +53,11 @@ describe('vault encryption', () => {
     });
     expect(new TextDecoder().decode(decryptSyncObject(encrypted, key))).toBe('private note');
 
-    const last = encrypted.ciphertext.at(-1);
-    const tampered = { ...encrypted, ciphertext: `${encrypted.ciphertext.slice(0, -1)}${last === 'A' ? 'B' : 'A'}` };
+    const first = encrypted.ciphertext[0];
+    const tampered = {
+      ...encrypted,
+      ciphertext: `${first === 'A' ? 'B' : 'A'}${encrypted.ciphertext.slice(1)}`,
+    };
     expect(() => decryptSyncObject(tampered, key)).toThrow(SyncIntegrityError);
   });
 
@@ -63,7 +66,9 @@ describe('vault encryption', () => {
     const key = VaultMasterKey.generate();
     const phrase = codec.encode(key);
     expect(codec.decode(phrase).equals(key)).toBe(true);
-    expect(() => codec.decode(`${phrase.slice(0, -1)}0`)).toThrow(/checksum/);
+    const finalCharacter = phrase.at(-1);
+    const corruptedPhrase = `${phrase.slice(0, -1)}${finalCharacter === '0' ? '1' : '0'}`;
+    expect(() => codec.decode(corruptedPhrase)).toThrow(/checksum/);
   });
 });
 

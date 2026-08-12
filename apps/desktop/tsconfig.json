@@ -1,8 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
     "jsx": "react-jsx",
     "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "scripts/**/*.mjs", "electron.vite.config.ts"]
 }

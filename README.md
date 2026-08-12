@@ -28,4 +28,7 @@ pnpm check
 pnpm dev
 ```
 
+The first desktop launch may download the Electron runtime. `pnpm dev` performs this check before
+electron-vite starts, so an interrupted initial download can be retried safely.
+
 No Oldfolio account or hosted service is required. Secrets must never be written into a vault.
