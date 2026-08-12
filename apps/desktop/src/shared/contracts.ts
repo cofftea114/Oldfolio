@@ -24,6 +24,12 @@ export interface SearchHit {
   score: number;
 }
 
+export interface FeedImportResult {
+  created: boolean;
+  snapshotId: string;
+  document: VaultDocument;
+}
+
 export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
@@ -32,4 +38,5 @@ export interface OldfolioDesktopApi {
   saveDocument(path: string, content: string, expectedRevision: string): Promise<VaultDocument>;
   search(query: string): Promise<SearchHit[]>;
   backlinks(path: string): Promise<DocumentSummary[]>;
+  importFeed(url: string): Promise<FeedImportResult>;
 }

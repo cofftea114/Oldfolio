@@ -10,6 +10,7 @@ const api: OldfolioDesktopApi = {
     ipcRenderer.invoke('vault:save', { path, content, expectedRevision }),
   search: (query) => ipcRenderer.invoke('vault:search', query),
   backlinks: (path) => ipcRenderer.invoke('vault:backlinks', path),
+  importFeed: (url) => ipcRenderer.invoke('source:import-feed', url),
 };
 
 contextBridge.exposeInMainWorld('oldfolio', api);

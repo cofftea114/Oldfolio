@@ -11,7 +11,12 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Rebuildable local search and link graph.
 - Reviewable, revision-bound AI change sets.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
-- Provider and connector contracts for local/BYOK AI and lawful source ingestion.
+- Provider contracts for local/BYOK AI.
+- Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
+- Desktop RSS/Podcast import UI with bounded, credential-free remote fetching.
+
+This repository is the first executable foundation slice, not the complete v1 described in the
+product roadmap. See [implementation status](docs/implementation-status.md) for the exact boundary.
 
 ## Development
 

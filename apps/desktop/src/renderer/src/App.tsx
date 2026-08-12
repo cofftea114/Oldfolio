@@ -7,11 +7,12 @@ import {
   FolderOpen,
   Network,
   PanelRightClose,
+  Radio,
   Search,
   Sparkles,
   Tags,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   DocumentSummary,
   SearchHit,
@@ -32,6 +33,10 @@ export function App() {
   const [backlinks, setBacklinks] = useState<DocumentSummary[]>([]);
   const [status, setStatus] = useState('本地就绪');
   const [detailsOpen, setDetailsOpen] = useState(true);
+  const [importOpen, setImportOpen] = useState(false);
+  const [feedUrl, setFeedUrl] = useState('');
+  const [importError, setImportError] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -54,6 +59,27 @@ export function App() {
     setActive(document);
     setDraft(document.content);
     setBacklinks(await window.oldfolio.backlinks(path));
+  };
+
+  const importFeed = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!vault || !feedUrl.trim() || importing) return;
+    setImporting(true);
+    setImportError('');
+    setStatus('正在导入订阅…');
+    try {
+      const result = await window.oldfolio.importFeed(feedUrl.trim());
+      await loadDocuments();
+      await openDocument(result.document.path);
+      setStatus(result.created ? '来源快照已保存' : '来源快照已存在');
+      setFeedUrl('');
+      setImportOpen(false);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法导入该订阅');
+      setStatus('导入失败');
+    } finally {
+      setImporting(false);
+    }
   };
 
   useEffect(() => {
@@ -102,6 +128,11 @@ export function App() {
         <button className="rail-button active" title="笔记"><BookOpenText /></button>
         <button className="rail-button" title="知识图谱"><Network /></button>
         <button className="rail-button" title="AI 工作台"><Sparkles /></button>
+        <button
+          className={importOpen ? 'rail-button active' : 'rail-button'}
+          title="导入 RSS / Podcast"
+          onClick={() => setImportOpen((value) => !value)}
+        ><Radio /></button>
         <div className="rail-spacer" />
         <button className="rail-button" title="打开 Vault" onClick={() => void openVault(false)}><FolderOpen /></button>
       </aside>
@@ -115,6 +146,23 @@ export function App() {
           <Search size={15} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索笔记与知识…" />
         </label>
+        {importOpen && (
+          <form className="source-import" onSubmit={(event) => void importFeed(event)}>
+            <div className="section-label"><Radio size={14} /> 导入 RSS / Podcast</div>
+            <input
+              aria-label="订阅地址"
+              disabled={!vault || importing}
+              onChange={(event) => setFeedUrl(event.target.value)}
+              placeholder={vault ? 'https://example.com/feed.xml' : '请先打开 Vault'}
+              type="url"
+              value={feedUrl}
+            />
+            {importError && <p role="alert">{importError}</p>}
+            <button disabled={!vault || !feedUrl.trim() || importing} type="submit">
+              {importing ? '正在获取…' : '保存来源快照'}
+            </button>
+          </form>
+        )}
         <div className="file-section">
           <div className="section-label">笔记 <span>{documents.length}</span></div>
           <nav className="file-list">

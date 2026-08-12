@@ -1,6 +1,7 @@
 import { join, parse } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
-import { extractMarkdownMetadata, VaultRepository } from '@oldfolio/vault';
+import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
+import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -11,6 +12,8 @@ import type {
 
 let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
+const rssConnector = new RssSourceConnector();
+const ingestion = new IngestionPipeline([rssConnector]);
 
 function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents) {
@@ -124,6 +127,32 @@ function registerIpc(): void {
     if (typeof path !== 'string') throw new TypeError('Invalid document path');
     const links = await requireRepository().backlinks(path);
     return Promise.all(links.map((link) => summarizeDocument(link.sourcePath)));
+  });
+  ipcMain.handle('source:import-feed', async (event, url: unknown) => {
+    assertTrustedSender(event);
+    if (typeof url !== 'string' || url.length > 4_096) throw new TypeError('Invalid feed URL');
+    const target = requireRepository();
+    const result = await ingestion.ingest(rssConnector.id, {
+      input: { kind: 'feed', url: url.trim() },
+      capabilities: ['metadata', 'content', 'subscription'],
+    });
+    let created = false;
+    try {
+      const existing = await target.read(result.document.path);
+      if (existing.text !== result.document.content) {
+        throw new Error('A source snapshot path exists with different content.');
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof VaultNotFoundError)) throw error;
+      await target.write(result.document.path, result.document.content, null);
+      created = true;
+    }
+    await target.rebuildIndex();
+    return {
+      created,
+      snapshotId: result.snapshot.id,
+      document: await readDocument(result.document.path),
+    };
   });
 }
 

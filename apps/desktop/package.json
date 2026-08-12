@@ -16,6 +16,7 @@
     "@codemirror/view": "^6.38.6",
     "@oldfolio/ai": "workspace:*",
     "@oldfolio/domain": "workspace:*",
+    "@oldfolio/ingest": "workspace:*",
     "@oldfolio/okf": "workspace:*",
     "@oldfolio/plugin-sdk": "workspace:*",
     "@oldfolio/sync": "workspace:*",
