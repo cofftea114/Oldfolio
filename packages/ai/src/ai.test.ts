@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   EndpointPolicyError,
   OpenAICompatibleProvider,
-  assertChangeSetRevision,
+  assertChangeSetRevisions,
   classifySummaryTemplate,
   createPromptDataBoundary,
   createWikiChangeSet,
@@ -71,30 +71,57 @@ describe('AI security boundaries', () => {
   });
 
   it('binds generated changes to a base revision and enforces risk', async () => {
+    const baseRevision = {
+      path: 'bundles/personal/wiki/topic.md',
+      revisionId: 'old',
+      contentHash: 'old',
+      modifiedAt: '2026-08-12T00:00:00.000Z',
+      byteLength: 3,
+    };
     const changeSet = await createWikiChangeSet({
-      baseRevision: 'rev-1',
+      baseRevisions: [baseRevision],
       sourceHashes: { source: 'sha256:123' },
-      model: 'local-model',
-      promptVersion: '1',
+      generator: { providerId: 'ollama', model: 'local-model', promptVersion: '1' },
       riskLevel: 'L2',
-      operations: [
-        { kind: 'update', path: 'bundles/personal/wiki/topic.md', beforeHash: 'old', content: 'new' },
+      items: [
+        {
+          id: 'item-1',
+          summary: '更新主题',
+          riskLevel: 'L2',
+          operation: {
+            kind: 'update',
+            path: 'bundles/personal/wiki/topic.md',
+            baseRevision,
+            content: 'new',
+            contentHash: 'new-hash',
+          },
+          diff: '-old\n+new',
+          citationIds: ['citation-1'],
+        },
       ],
-      citations: [{ sourceId: 'source', locator: '00:01:00' }],
+      citations: [{ id: 'citation-1', sourceId: 'source', resource: 'raw/source.md', startMs: 60_000 }],
       createdAt: '2026-08-12T00:00:00.000Z',
     });
     expect(changeSet.id).toMatch(/^[a-f0-9]{64}$/);
-    expect(() => assertChangeSetRevision(changeSet, 'rev-2')).toThrow(/Stale/);
+    expect(() => assertChangeSetRevisions(changeSet, { [baseRevision.path]: 'rev-2' })).toThrow(/Stale/);
     await expect(
       createWikiChangeSet({
-        baseRevision: 'rev-1',
+        baseRevisions: [baseRevision],
         sourceHashes: { source: 'sha256:123' },
-        model: 'local-model',
-        promptVersion: '1',
+        generator: { providerId: 'ollama', model: 'local-model', promptVersion: '1' },
         riskLevel: 'L1',
-        operations: [{ kind: 'delete', path: 'notes/private.md', beforeHash: 'old' }],
+        items: [
+          {
+            id: 'item-2',
+            summary: '删除笔记',
+            riskLevel: 'L1',
+            operation: { kind: 'delete', path: 'notes/private.md', baseRevision },
+            diff: '-private',
+            citationIds: [],
+          },
+        ],
         citations: [],
       }),
-    ).rejects.toThrow(/higher risk/);
+    ).rejects.toThrow(/L3 or higher/);
   });
 });

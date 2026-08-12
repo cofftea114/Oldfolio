@@ -12,5 +12,8 @@
   "dependencies": {
     "@oldfolio/domain": "workspace:*",
     "@oldfolio/okf": "workspace:*"
+  },
+  "devDependencies": {
+    "@oldfolio/ai": "workspace:*"
   }
 }

@@ -180,6 +180,10 @@ importers:
       '@oldfolio/okf':
         specifier: workspace:*
         version: link:../okf
+    devDependencies:
+      '@oldfolio/ai':
+        specifier: workspace:*
+        version: link:../ai
 
 packages:
 
