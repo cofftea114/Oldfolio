@@ -26,6 +26,10 @@ claim that the planned 9–12 month v1 is complete.
   PCM files, restores timestamp offsets, and skips only completed chunks whose VTT hash still
   matches. Tool paths and installed-model records stay in the Electron device-data directory rather
   than the synchronized Vault.
+- Open locally generated Transcript notes with an embedded audio/video player and clickable segment
+  timeline. A private streaming protocol supports byte ranges while authorizing only
+  content-addressed `assets/media/` files in the currently open Vault; arbitrary paths and ordinary
+  Markdown links cannot use it.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -45,7 +49,7 @@ claim that the planned 9–12 month v1 is complete.
 ## Not implemented yet
 
 - Automatic FFmpeg/`whisper.cpp` installation, signed model download manifests, real-device
-  long-media benchmarks, translation, and embedded time-linked media playback. The settings UI,
+  long-media benchmarks, translation, and advanced waveform/chapter editing. The settings UI,
   local model import, controlled chunked execution, retry workflow, and interruption/disk-pressure
   tests are implemented, but no binary or model is bundled.
 - Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
@@ -55,6 +59,6 @@ claim that the planned 9–12 month v1 is complete.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
 
-The next product increment should add the time-linked media player and transcript navigation, then
-design a signed SHA-256 model manifest and download/resume flow without weakening the current
+The next product increment should connect local/BYOK AI settings and reviewable summary change sets,
+then design a signed SHA-256 model manifest and download/resume flow without weakening the current
 explicit license-acceptance boundary.

@@ -18,6 +18,7 @@ const api: OldfolioDesktopApi = {
   transcribeMedia: (input) => ipcRenderer.invoke('media:transcribe', input),
   retryMediaJob: (jobId) => ipcRenderer.invoke('media:retry-job', jobId),
   listMediaJobs: () => ipcRenderer.invoke('media:list-jobs'),
+  getTranscriptPlayback: (path) => ipcRenderer.invoke('media:get-playback', path),
 };
 
 contextBridge.exposeInMainWorld('oldfolio', api);

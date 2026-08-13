@@ -18,6 +18,7 @@ import {
   probeMediaDuration,
 } from './media-analysis.js';
 import { importLocalModel } from './model-store.js';
+import { parseTranscriptPlaybackManifest } from './playback.js';
 import { ControlledProcessError, runControlledProcess } from './process.js';
 import { compileTranscriptDocument } from './transcript-document.js';
 import { WhisperCppTranscriber, verifyLocalModel } from './whisper.js';
@@ -61,6 +62,24 @@ describe('caption parsing and OKF compilation', () => {
       oldfolio: { id: compiled.id, segment_count: 1 },
     });
     expect(compiled.content).toContain('[00:01](assets/talk.mp4#t=1.250)');
+    expect(parseTranscriptPlaybackManifest(compiled.content, compiled.path)).toEqual({
+      title: 'Talk — Transcript',
+      resource: 'assets/talk.mp4',
+      segments: [{ startMs: 1_250, label: '00:01', text: 'A cited claim' }],
+    });
+  });
+
+  it('does not create playback manifests from ordinary or malformed notes', () => {
+    expect(parseTranscriptPlaybackManifest('# Note\n\n- [00:01](assets/a.mp3#t=1) text', 'notes/a.md')).toBeNull();
+    const transcript = compileTranscriptDocument({
+      sourceId: 'source', sourceHash: sha256('source'), sourceResource: 'assets/a.mp3',
+      sourceTitle: 'Audio', generatedAt: '2026-08-13T00:00:00.000Z', generator: 'test',
+      transcript: { text: 'hello', segments: [{ startMs: 1_000, endMs: 2_000, text: 'hello' }] },
+    });
+    expect(parseTranscriptPlaybackManifest(
+      transcript.content.replace('(assets/a.mp3#t=1.000)', '(assets/other.mp3#t=1.000)'),
+      transcript.path,
+    )).toBeNull();
   });
 });
 

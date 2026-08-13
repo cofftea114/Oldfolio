@@ -1,15 +1,17 @@
 import { join, parse } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
   MediaJobStore,
   importLocalModel,
+  parseTranscriptPlaybackManifest,
   probeMediaTools,
 } from '@oldfolio/media';
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import { importCaptionFile } from './caption-import.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
+import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -26,6 +28,10 @@ const activeMediaTasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'oldfolio-media', privileges: { standard: true, secure: true, stream: true } },
+]);
 
 function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents) {
@@ -339,6 +345,24 @@ function registerIpc(): void {
       activeMediaTasks.delete(controller);
     }
   });
+  ipcMain.handle('media:get-playback', async (event, path: unknown) => {
+    assertTrustedSender(event);
+    if (typeof path !== 'string') throw new TypeError('Invalid transcript path');
+    const document = await requireRepository().read(path);
+    const manifest = parseTranscriptPlaybackManifest(document.text, document.path);
+    if (!manifest) return null;
+    const extension = manifest.resource.slice(manifest.resource.lastIndexOf('.') + 1).toLowerCase();
+    try {
+      return {
+        ...manifest,
+        mediaUrl: mediaPlaybackUrl(manifest.resource),
+        mediaKind: ['mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'webm'].includes(extension) ? 'video' : 'audio',
+      };
+    } catch {
+      // Caption-only imports may refer to an external file that Oldfolio is not authorized to stream.
+      return null;
+    }
+  });
 }
 
 function createWindow(): void {
@@ -384,6 +408,7 @@ void app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
+  void protocol.handle('oldfolio-media', (request) => handleVaultMediaRequest(request, repository?.root ?? null));
   registerIpc();
   createWindow();
   app.on('activate', () => {

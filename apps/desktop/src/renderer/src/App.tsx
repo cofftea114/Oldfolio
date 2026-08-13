@@ -20,10 +20,12 @@ import type {
   MediaJobSummary,
   MediaSettingsSummary,
   SearchHit,
+  TranscriptPlaybackSummary,
   VaultDocument,
   VaultSummary,
 } from '../../shared/contracts';
 import { MarkdownEditor } from './MarkdownEditor';
+import { TranscriptPlayer } from './TranscriptPlayer';
 
 const EMPTY_MESSAGE = '# 欢迎来到 Oldfolio\n\n选择或创建一个本地 Vault 开始记录。';
 
@@ -51,6 +53,7 @@ export function App() {
   const [modelAccepted, setModelAccepted] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
   const [mediaLanguage, setMediaLanguage] = useState('auto');
+  const [playback, setPlayback] = useState<TranscriptPlaybackSummary | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -64,15 +67,21 @@ export function App() {
     if (!next) return;
     setVault(next);
     setActive(null);
+    setPlayback(null);
     setDraft(EMPTY_MESSAGE);
     await loadDocuments();
   };
 
   const openDocument = async (path: string) => {
-    const document = await window.oldfolio.readDocument(path);
+    const [document, nextBacklinks, nextPlayback] = await Promise.all([
+      window.oldfolio.readDocument(path),
+      window.oldfolio.backlinks(path),
+      window.oldfolio.getTranscriptPlayback(path),
+    ]);
     setActive(document);
     setDraft(document.content);
-    setBacklinks(await window.oldfolio.backlinks(path));
+    setBacklinks(nextBacklinks);
+    setPlayback(nextPlayback);
   };
 
   const importFeed = async (event: FormEvent<HTMLFormElement>) => {
@@ -381,11 +390,12 @@ export function App() {
         )}
       </aside>
 
-      <section className="workspace">
+      <section className={playback ? 'workspace has-player' : 'workspace'}>
         <div className="workspace-toolbar">
           <div className="document-type"><span>MD</span>{active?.path ?? '起始页'}</div>
           <button className="icon-button" title="切换详情" onClick={() => setDetailsOpen((value) => !value)}><PanelRightClose /></button>
         </div>
+        {playback && <TranscriptPlayer key={`${active?.path ?? ''}-${playback.resource}`} playback={playback} />}
         <MarkdownEditor key={active?.path ?? 'welcome'} value={draft} onChange={setDraft} />
       </section>
 

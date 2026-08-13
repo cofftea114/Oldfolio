@@ -80,6 +80,21 @@ export interface MediaTranscriptionResult {
   transcript?: VaultDocument;
 }
 
+export interface TranscriptPlaybackSegment {
+  startMs: number;
+  label: string;
+  text: string;
+  speaker?: string;
+}
+
+export interface TranscriptPlaybackSummary {
+  title: string;
+  resource: string;
+  mediaUrl: string;
+  mediaKind: 'audio' | 'video';
+  segments: TranscriptPlaybackSegment[];
+}
+
 export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
@@ -102,4 +117,5 @@ export interface OldfolioDesktopApi {
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
+  getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
 }

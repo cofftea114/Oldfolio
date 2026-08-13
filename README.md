@@ -17,6 +17,8 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Per-device FFmpeg/ffprobe/whisper.cpp configuration and user-approved local model import; no
   binaries or models are bundled or synchronized. Local transcription runs in verified 15-minute
   chunks and can continue from completed chunks after an interruption.
+- Embedded audio/video playback for content-addressed Vault media, with HTTP Range seeking and a
+  clickable transcript timeline that follows the current playback position.
 - Desktop RSS/Podcast import UI with bounded, credential-free remote fetching.
 
 This repository is the first executable foundation slice, not the complete v1 described in the
