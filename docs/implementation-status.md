@@ -14,6 +14,11 @@ claim that the planned 9–12 month v1 is complete.
   without ambient credentials, treated as untrusted data, and compiled into an immutable OKF
   `Source` snapshot under `bundles/personal/raw/`.
 - Import local text and caption sources through the reusable connector API.
+- Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
+  and compile strict OKF `Transcript` concepts linked back to the local source time position.
+- Persist media job checkpoints under the non-synchronized cache, requeue interrupted work at
+  startup, execute local media tools without shell interpretation, and verify local model hashes
+  and provenance before use.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -32,8 +37,9 @@ claim that the planned 9–12 month v1 is complete.
 
 ## Not implemented yet
 
-- FFmpeg job execution, `whisper.cpp` model management, resumable two-hour transcription, speaker
-  processing, translation, and time-linked media playback.
+- Automatic FFmpeg/`whisper.cpp` installation and settings UI, model download/licence acceptance,
+  real long-media execution benchmarks, translation, and embedded time-linked media playback. The
+  controlled execution adapter and resumable job core are implemented, but no model is bundled.
 - Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
   evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
@@ -41,5 +47,5 @@ claim that the planned 9–12 month v1 is complete.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
 
-The next product increment should connect local media ingestion and transcription to the same
-`SourceSnapshot → OKF Source → WikiChangeSet → Vault` pipeline already exercised by integration tests.
+The next product increment should add user-configurable FFmpeg/`whisper.cpp` paths and a verified
+model-download flow, then run the implemented adapter through long-media interruption tests.

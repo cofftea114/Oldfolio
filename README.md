@@ -13,6 +13,7 @@ bundles, media-derived notes, and user-controlled AI providers.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
 - Provider contracts for local/BYOK AI.
 - Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
+- Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Desktop RSS/Podcast import UI with bounded, credential-free remote fetching.
 
 This repository is the first executable foundation slice, not the complete v1 described in the

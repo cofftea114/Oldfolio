@@ -53,6 +53,9 @@ importers:
       '@oldfolio/ingest':
         specifier: workspace:*
         version: link:../../packages/ingest
+      '@oldfolio/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@oldfolio/okf':
         specifier: workspace:*
         version: link:../../packages/okf

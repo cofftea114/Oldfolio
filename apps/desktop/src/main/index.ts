@@ -1,7 +1,9 @@
 import { join, parse } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
+import { MediaJobStore } from '@oldfolio/media';
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
+import { importCaptionFile } from './caption-import.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -12,6 +14,7 @@ import type {
 
 let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
+let mediaJobs: MediaJobStore | null = null;
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
@@ -25,6 +28,11 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent): void {
 function requireRepository(): VaultRepository {
   if (!repository) throw new Error('请先打开一个 Vault');
   return repository;
+}
+
+function requireMediaJobs(): MediaJobStore {
+  if (!mediaJobs) throw new Error('请先打开一个 Vault');
+  return mediaJobs;
 }
 
 async function summarizeDocument(path: string): Promise<DocumentSummary> {
@@ -57,6 +65,8 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   repository?.close();
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
+  mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
+  await mediaJobs.initialize();
   await repository.rebuildIndex();
   const documents = await repository.scanDocuments();
   return { root, name: parse(root).name, documentCount: documents.length };
@@ -153,6 +163,25 @@ function registerIpc(): void {
       created,
       snapshotId: result.snapshot.id,
       document: await readDocument(result.document.path),
+    };
+  });
+  ipcMain.handle('media:import-captions', async (event) => {
+    assertTrustedSender(event);
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '导入字幕并生成时间戳笔记',
+      properties: ['openFile'],
+      filters: [{ name: '字幕文件', extensions: ['srt', 'vtt'] }],
+      buttonLabel: '生成转录笔记',
+    });
+    const filePath = selection.filePaths[0];
+    if (selection.canceled || !filePath) return { cancelled: true };
+    const result = await importCaptionFile(requireRepository(), requireMediaJobs(), filePath);
+    return {
+      cancelled: false,
+      createdSource: result.createdSource,
+      createdTranscript: result.createdTranscript,
+      jobId: result.jobId,
+      transcript: await readDocument(result.transcriptPath),
     };
   });
 }

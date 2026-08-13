@@ -10,6 +10,7 @@ export default defineConfig({
           '@oldfolio/ai',
           '@oldfolio/domain',
           '@oldfolio/ingest',
+          '@oldfolio/media',
           '@oldfolio/okf',
           '@oldfolio/plugin-sdk',
           '@oldfolio/sync',

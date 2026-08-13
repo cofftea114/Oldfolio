@@ -30,6 +30,14 @@ export interface FeedImportResult {
   document: VaultDocument;
 }
 
+export interface CaptionImportResult {
+  cancelled: boolean;
+  createdSource?: boolean;
+  createdTranscript?: boolean;
+  jobId?: string;
+  transcript?: VaultDocument;
+}
+
 export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
@@ -39,4 +47,5 @@ export interface OldfolioDesktopApi {
   search(query: string): Promise<SearchHit[]>;
   backlinks(path: string): Promise<DocumentSummary[]>;
   importFeed(url: string): Promise<FeedImportResult>;
+  importCaptions(): Promise<CaptionImportResult>;
 }

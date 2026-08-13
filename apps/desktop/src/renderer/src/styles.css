@@ -63,7 +63,10 @@ button { color: inherit; }
 .source-import input:focus { border-color: #8ca194; box-shadow: 0 0 0 2px var(--accent-soft); }
 .source-import p { margin: 7px 0 0; color: #a3483f; font-size: 10px; line-height: 1.4; }
 .source-import button { width: 100%; margin-top: 9px; border: 0; border-radius: 7px; padding: 8px; background: var(--accent); color: white; cursor: pointer; font-size: 11px; }
+.source-import button.secondary { display: flex; align-items: center; justify-content: center; gap: 6px; background: #e5e9e5; color: var(--accent); border: 1px solid #ccd7d0; }
 .source-import button:disabled { opacity: .5; cursor: not-allowed; }
+.import-divider { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; color: var(--muted); font-size: 9px; }
+.import-divider::before, .import-divider::after { content: ''; height: 1px; background: var(--line); flex: 1; }
 .file-section { margin-top: 22px; }
 .section-label { display: flex; align-items: center; gap: 6px; margin: 0 5px 9px; }
 .section-label span { margin-left: auto; font-variant-numeric: tabular-nums; }

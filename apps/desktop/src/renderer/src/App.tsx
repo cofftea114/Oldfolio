@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Network,
   PanelRightClose,
+  Captions,
   Radio,
   Search,
   Sparkles,
@@ -77,6 +78,29 @@ export function App() {
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '无法导入该订阅');
       setStatus('导入失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const importCaptions = async () => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    setStatus('正在解析字幕…');
+    try {
+      const result = await window.oldfolio.importCaptions();
+      if (result.cancelled || !result.transcript) {
+        setStatus('已取消导入');
+        return;
+      }
+      await loadDocuments();
+      await openDocument(result.transcript.path);
+      setStatus(result.createdTranscript ? '时间戳转录笔记已生成' : '该转录笔记已存在');
+      setImportOpen(false);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法导入字幕');
+      setStatus('字幕导入失败');
     } finally {
       setImporting(false);
     }
@@ -160,6 +184,10 @@ export function App() {
             {importError && <p role="alert">{importError}</p>}
             <button disabled={!vault || !feedUrl.trim() || importing} type="submit">
               {importing ? '正在获取…' : '保存来源快照'}
+            </button>
+            <div className="import-divider"><span>或</span></div>
+            <button className="secondary" disabled={!vault || importing} onClick={() => void importCaptions()} type="button">
+              <Captions size={14} /> 导入 SRT / VTT 字幕
             </button>
           </form>
         )}
