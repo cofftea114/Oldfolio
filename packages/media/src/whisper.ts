@@ -13,7 +13,7 @@ export interface LocalTranscriptionOptions {
   readonly workDirectory: string;
   readonly language?: string;
   readonly signal?: AbortSignal;
-  readonly onStage?: (stage: 'extracting_audio' | 'transcribing') => void;
+  readonly onStage?: (stage: 'extracting_audio' | 'transcribing') => void | Promise<void>;
 }
 
 export type ProcessRunner = (request: ControlledProcessRequest) => Promise<{
@@ -45,7 +45,7 @@ export class WhisperCppTranscriber {
     const stem = basename(mediaPath, extname(mediaPath)).replaceAll(/[^a-zA-Z0-9._-]/gu, '-');
     const wavePath = join(options.workDirectory, `${stem}.16khz.wav`);
     const outputBase = join(options.workDirectory, `${stem}.transcript`);
-    options.onStage?.('extracting_audio');
+    await options.onStage?.('extracting_audio');
     await this.#run({
       executablePath: options.ffmpegPath,
       args: ['-nostdin', '-y', '-i', mediaPath, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wavePath],
@@ -54,7 +54,7 @@ export class WhisperCppTranscriber {
       maxOutputBytes: 8 * 1024 * 1024,
       ...(options.signal ? { signal: options.signal } : {}),
     });
-    options.onStage?.('transcribing');
+    await options.onStage?.('transcribing');
     await this.#run({
       executablePath: options.whisperPath,
       args: [

@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseOkfDocument } from '@oldfolio/okf';
 
+import { importMediaAsset } from './asset-import.js';
 import { CaptionParseError, parseCaptions } from './captions.js';
+import { MediaDeviceConfigStore, probeMediaTools } from './device-config.js';
 import { MediaJobStore } from './jobs.js';
+import { importLocalModel } from './model-store.js';
 import { ControlledProcessError, runControlledProcess } from './process.js';
 import { compileTranscriptDocument } from './transcript-document.js';
 import { verifyLocalModel } from './whisper.js';
@@ -110,5 +113,57 @@ describe('local media tool boundary', () => {
     await expect(verifyLocalModel(descriptor)).resolves.toBeUndefined();
     await expect(verifyLocalModel({ ...descriptor, sha256: sha256('wrong') })).rejects.toThrow(/hash mismatch/);
     expect(await readFile(modelPath, 'utf8')).toBe('model bytes');
+  });
+
+  it('stores device-only tool paths and probes configured executables', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-device-media-'));
+    roots.push(root);
+    const store = new MediaDeviceConfigStore(join(root, 'media.json'));
+    expect(await store.load()).toEqual({ version: 1, models: [] });
+    await store.setTool('ffmpeg', 'C:/tools/ffmpeg.exe');
+    await store.setTool('whisper', 'C:/tools/whisper-cli.exe');
+    const config = await store.load();
+    const calls: string[] = [];
+    const status = await probeMediaTools(config, (request) => {
+      calls.push(`${request.executablePath} ${request.args.join(' ')}`);
+      return Promise.resolve({ stdout: `${request.args[0] === '-version' ? 'ffmpeg 8.0' : 'whisper.cpp 1.7'}`, stderr: '' });
+    });
+    expect(status.ffmpeg).toMatchObject({ available: true, version: 'ffmpeg 8.0' });
+    expect(status.whisper).toMatchObject({ available: true, version: 'whisper.cpp 1.7' });
+    expect(calls).toEqual(['C:/tools/ffmpeg.exe -version', 'C:/tools/whisper-cli.exe --help']);
+  });
+
+  it('imports models and media assets by streaming content hashes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-local-assets-'));
+    roots.push(root);
+    const sourceModel = join(root, 'tiny.bin');
+    const sourceMedia = join(root, 'talk.mp3');
+    await writeFile(sourceModel, 'model bytes');
+    await writeFile(sourceMedia, 'media bytes');
+    const model = await importLocalModel({
+      sourcePath: sourceModel,
+      modelDirectory: join(root, 'models'),
+      id: 'tiny',
+      license: 'user-confirmed-license',
+      sourceUrl: 'https://huggingface.co/ggerganov/whisper.cpp',
+      licenseAccepted: true,
+      expectedSha256: sha256('model bytes'),
+      now: () => new Date('2026-08-13T00:00:00.000Z'),
+    });
+    expect(model).toMatchObject({ id: 'tiny', sha256: sha256('model bytes'), byteLength: 11 });
+    expect(await readFile(model.filePath, 'utf8')).toBe('model bytes');
+    await expect(importLocalModel({
+      sourcePath: sourceModel,
+      modelDirectory: join(root, 'models'),
+      id: 'bad',
+      license: 'accepted',
+      sourceUrl: 'https://example.com/model',
+      licenseAccepted: true,
+      expectedSha256: sha256('wrong'),
+    })).rejects.toThrow(/trusted manifest/);
+
+    const asset = await importMediaAsset(sourceMedia, join(root, 'vault'));
+    expect(asset.vaultPath).toBe(`assets/media/${sha256('media bytes')}.mp3`);
+    expect(await readFile(asset.absolutePath, 'utf8')).toBe('media bytes');
   });
 });
