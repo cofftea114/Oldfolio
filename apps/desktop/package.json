@@ -6,9 +6,10 @@
   "main": "./out/main/index.js",
   "scripts": {
     "electron:ensure": "node ./scripts/ensure-electron.mjs",
+    "smoke:startup": "pnpm build && node ./scripts/probe-startup.mjs",
     "predev": "pnpm electron:ensure",
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node ./scripts/verify-main-bundle.mjs",
     "prepreview": "pnpm electron:ensure",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit"

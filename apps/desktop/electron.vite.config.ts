@@ -9,6 +9,7 @@ export default defineConfig({
         exclude: [
           '@oldfolio/ai',
           '@oldfolio/domain',
+          '@oldfolio/ingest',
           '@oldfolio/okf',
           '@oldfolio/plugin-sdk',
           '@oldfolio/sync',

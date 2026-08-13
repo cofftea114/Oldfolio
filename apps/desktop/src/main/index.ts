@@ -12,6 +12,7 @@ import type {
 
 let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
+const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
 
@@ -163,9 +164,10 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#f8f7f2',
+    show: !startupProbe,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(import.meta.dirname, '../preload/index.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -175,11 +177,21 @@ function createWindow(): void {
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  if (startupProbe) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      console.log('Oldfolio desktop startup probe passed.');
+      app.quit();
+    });
+    mainWindow.webContents.once('did-fail-load', (_event, code, description) => {
+      console.error(`Oldfolio desktop startup probe failed: ${code} ${description}`);
+      app.exit(1);
+    });
+  }
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+    void mainWindow.loadFile(join(import.meta.dirname, '../renderer/index.html'));
   }
 }
 
