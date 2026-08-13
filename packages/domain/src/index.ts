@@ -1,6 +1,7 @@
 export * from './ai.js';
 export * from './changeset.js';
 export * from './common.js';
+export * from './media.js';
 export * from './okf.js';
 export * from './plugins.js';
 export * from './sources.js';

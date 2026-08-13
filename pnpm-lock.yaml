@@ -161,6 +161,15 @@ importers:
         specifier: workspace:*
         version: link:../vault
 
+  packages/media:
+    dependencies:
+      '@oldfolio/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@oldfolio/okf':
+        specifier: workspace:*
+        version: link:../okf
+
   packages/okf:
     dependencies:
       '@oldfolio/domain':
