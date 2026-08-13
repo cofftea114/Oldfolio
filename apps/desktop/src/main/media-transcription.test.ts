@@ -3,11 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MediaDeviceConfigStore, MediaJobStore } from '@oldfolio/media';
+import { MediaDeviceConfigStore, MediaJobStore, type ProcessRunner } from '@oldfolio/media';
 import { parseOkfDocument } from '@oldfolio/okf';
 import { VaultRepository } from '@oldfolio/vault';
 
-import { transcribeMediaFile } from './media-transcription.js';
+import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 
 const roots: string[] = [];
 
@@ -54,6 +54,9 @@ describe('desktop local media transcription', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       run: async (request) => {
         calls.push([...request.args]);
+        if (request.executablePath.includes('ffprobe')) {
+          return { exitCode: 0, stdout: '{"format":{"duration":"2"}}', stderr: '' };
+        }
         if (request.executablePath.includes('ffmpeg')) {
           await writeFile(request.args.at(-1) ?? '', 'wav');
         } else {
@@ -63,13 +66,78 @@ describe('desktop local media transcription', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
     });
-    expect(calls[0]).toContain('16000');
-    expect(calls[1]).toContain('-ovtt');
+    expect(calls[1]).toContain('16000');
+    expect(calls[2]).toContain('-ovtt');
     expect(await readFile(join(vaultRoot, ...result.assetPath.split('/')), 'utf8')).toBe('fake audio');
     const transcript = await vault.read(result.transcriptPath);
     expect(parseOkfDocument(transcript.text, result.transcriptPath.replace('bundles/personal/', '')).valid).toBe(true);
     expect(transcript.text).toContain('知识应当可追溯。');
     expect((await jobs.get(result.jobId)).stage).toBe('completed');
+    vault.close();
+  });
+
+  it('retries a failed job without recomputing verified chunks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-transcribe-retry-'));
+    roots.push(root);
+    const vaultRoot = join(root, 'vault');
+    const mediaPath = join(root, 'long.mp3');
+    const modelPath = join(root, 'model.bin');
+    await writeFile(mediaPath, 'fake long audio');
+    await writeFile(modelPath, 'model');
+    const vault = await VaultRepository.open(vaultRoot);
+    await vault.initialize();
+    const jobs = new MediaJobStore(join(vaultRoot, '.oldfolio/cache/media-jobs'));
+    await jobs.initialize();
+    const device = new MediaDeviceConfigStore(join(root, 'device-media.json'));
+    await device.save({
+      version: 1,
+      ffmpegPath: 'C:/tools/ffmpeg.exe',
+      whisperPath: 'C:/tools/whisper-cli.exe',
+      models: [{
+        id: 'tiny', filePath: modelPath, sha256: createHash('sha256').update('model').digest('hex'),
+        license: 'accepted', sourceUrl: 'https://example.com/model', byteLength: 5,
+        importedAt: '2026-08-13T00:00:00.000Z', licenseAcceptedAt: '2026-08-13T00:00:00.000Z',
+      }],
+    });
+    let firstWhisperCalls = 0;
+    const firstRun: ProcessRunner = async (request) => {
+      if (request.executablePath.includes('ffprobe')) return { exitCode: 0, stdout: '{"format":{"duration":"7200"}}', stderr: '' };
+      if (request.executablePath.includes('ffmpeg')) {
+        await writeFile(request.args.at(-1) ?? '', 'wav');
+      } else {
+        firstWhisperCalls += 1;
+        if (firstWhisperCalls === 3) throw new Error('interrupted');
+        const outputIndex = request.args.indexOf('-of');
+        await writeFile(`${request.args[outputIndex + 1]}.vtt`, 'WEBVTT\n\n00:01.000 --> 00:02.000\nFirst chunk');
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    await expect(transcribeMediaFile(vault, jobs, device, {
+      mediaPath, vaultRoot, modelId: 'tiny',
+    }, { run: firstRun })).rejects.toThrow('interrupted');
+    const [failed] = await jobs.list();
+    expect(failed).toMatchObject({ stage: 'failed', attempts: 1 });
+    expect(failed?.checkpoints.filter((checkpoint) => checkpoint.artifactHash && checkpoint.chunkIndex !== undefined)).toHaveLength(2);
+
+    let resumedWhisperCalls = 0;
+    const result = await resumeMediaTranscription(vault, jobs, device, failed!.id, {
+      run: async (request) => {
+        if (request.executablePath.includes('ffprobe')) return { exitCode: 0, stdout: '{"format":{"duration":"7200"}}', stderr: '' };
+        if (request.executablePath.includes('ffmpeg')) {
+          await writeFile(request.args.at(-1) ?? '', 'wav');
+        } else {
+          resumedWhisperCalls += 1;
+          const outputIndex = request.args.indexOf('-of');
+          await writeFile(`${request.args[outputIndex + 1]}.vtt`, 'WEBVTT\n\n00:01.000 --> 00:02.000\nSecond chunk');
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    expect(resumedWhisperCalls).toBe(6);
+    expect((await jobs.get(result.jobId))).toMatchObject({ stage: 'completed', attempts: 2 });
+    const transcript = await vault.read(result.transcriptPath);
+    expect(transcript.text).toContain('First chunk');
+    expect(transcript.text).toContain('Second chunk');
     vault.close();
   });
 });

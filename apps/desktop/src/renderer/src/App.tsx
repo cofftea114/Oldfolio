@@ -200,6 +200,29 @@ export function App() {
     }
   };
 
+  const retryMediaJob = async (jobId: string) => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    setStatus('正在从已校验的媒体分块继续转录…');
+    const poll = window.setInterval(() => void window.oldfolio.listMediaJobs().then(setMediaJobs), 1_000);
+    try {
+      const result = await window.oldfolio.retryMediaJob(jobId);
+      if (result.transcript) {
+        await loadDocuments();
+        await openDocument(result.transcript.path);
+      }
+      setStatus('媒体转录已恢复并完成');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '恢复媒体任务失败');
+      setStatus('恢复失败，已完成分块仍会保留');
+    } finally {
+      window.clearInterval(poll);
+      await refreshMedia();
+      setImporting(false);
+    }
+  };
+
   useEffect(() => {
     const timeout = window.setTimeout(async () => {
       if (!active || draft === active.content) return;
@@ -325,7 +348,9 @@ export function App() {
             {mediaJobs.slice(0, 3).map((job) => (
               <div className="job-row" key={job.id}>
                 <span>{job.stage}</span><progress max="1" value={job.progress} />
+                <small>{job.chunkCount ? `${job.completedChunks}/${job.chunkCount} 分块` : `第 ${job.attempts} 次运行`}</small>
                 {job.error && <small>{job.error}</small>}
+                {job.canRetry && <button disabled={importing} onClick={() => void retryMediaJob(job.id)}>继续</button>}
               </div>
             ))}
             {importError && <p className="media-error" role="alert">{importError}</p>}

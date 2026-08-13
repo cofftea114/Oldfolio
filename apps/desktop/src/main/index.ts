@@ -9,7 +9,7 @@ import {
 } from '@oldfolio/media';
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import { importCaptionFile } from './caption-import.js';
-import { transcribeMediaFile } from './media-transcription.js';
+import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -302,14 +302,42 @@ function registerIpc(): void {
   });
   ipcMain.handle('media:list-jobs', async (event) => {
     assertTrustedSender(event);
-    return (await requireMediaJobs().list()).map((job) => ({
+    return (await requireMediaJobs().list()).map((job) => {
+      const completedChunks = new Set(job.checkpoints.flatMap((checkpoint) => (
+        checkpoint.artifactHash && checkpoint.chunkIndex !== undefined ? [checkpoint.chunkIndex] : []
+      ))).size;
+      const chunkCount = job.checkpoints.findLast((checkpoint) => checkpoint.chunkCount !== undefined)?.chunkCount;
+      return {
       id: job.id,
       sourceUri: job.sourceUri,
       stage: job.stage,
       progress: job.checkpoints.at(-1)?.progress ?? 0,
       updatedAt: job.updatedAt,
+      attempts: job.attempts,
+      completedChunks,
+      ...(chunkCount !== undefined ? { chunkCount } : {}),
+      canRetry: Boolean(job.request) && (job.stage === 'queued' || (job.stage === 'failed' && job.error?.retryable)),
       ...(job.error ? { error: job.error.message } : {}),
-    }));
+      };
+    });
+  });
+  ipcMain.handle('media:retry-job', async (event, jobId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof jobId !== 'string') throw new TypeError('Invalid media job id');
+    const controller = new AbortController();
+    activeMediaTasks.add(controller);
+    try {
+      const result = await resumeMediaTranscription(
+        requireRepository(),
+        requireMediaJobs(),
+        requireMediaDeviceConfig(),
+        jobId,
+        { signal: controller.signal },
+      );
+      return { cancelled: false, jobId: result.jobId, transcript: await readDocument(result.transcriptPath) };
+    } finally {
+      activeMediaTasks.delete(controller);
+    }
   });
 }
 

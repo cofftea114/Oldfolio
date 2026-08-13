@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 
 import type { LocalModelDescriptor } from '@oldfolio/domain';
 
+import { deriveFfprobePath } from './media-analysis.js';
 import { runControlledProcess, type ControlledProcessRequest } from './process.js';
 
 export interface InstalledLocalModel extends LocalModelDescriptor {
@@ -132,9 +133,13 @@ export async function probeMediaTools(
   config: MediaDeviceConfig,
   runner: ProbeRunner = runControlledProcess,
 ): Promise<MediaToolsStatus> {
-  const [ffmpeg, whisper] = await Promise.all([
+  const [ffmpeg, ffprobe, whisper] = await Promise.all([
     probeOne(config.ffmpegPath, ['-version'], runner),
+    probeOne(config.ffmpegPath ? deriveFfprobePath(config.ffmpegPath) : undefined, ['-version'], runner),
     probeOne(config.whisperPath, ['--help'], runner),
   ]);
-  return { ffmpeg, whisper };
+  const ffmpegBundle = ffmpeg.available && !ffprobe.available
+    ? { ...ffmpeg, available: false, error: `ffprobe is required beside FFmpeg: ${ffprobe.error ?? ffprobe.path ?? 'not found'}` }
+    : ffmpeg;
+  return { ffmpeg: ffmpegBundle, whisper };
 }

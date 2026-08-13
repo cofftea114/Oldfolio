@@ -16,13 +16,16 @@ claim that the planned 9–12 month v1 is complete.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.
-- Persist media job checkpoints under the non-synchronized cache, requeue interrupted work at
-  startup, execute local media tools without shell interpretation, and verify local model hashes
-  and provenance before use.
-- Configure FFmpeg and `whisper-cli` per device, import user-approved GGML models with streaming
+- Persist media job requests and SHA-256-verified chunk checkpoints under the non-synchronized
+  cache, requeue interrupted work at startup, and expose retry controls for queued/failed jobs.
+- Configure FFmpeg (including the adjacent `ffprobe`) and `whisper-cli` per device, import
+  user-approved GGML models with streaming
   SHA-256 verification, copy selected media into content-addressed Vault assets, and run the local
-  transcription adapter from the desktop UI. Tool paths and installed-model records stay in the
-  Electron device-data directory rather than the synchronized Vault.
+  transcription adapter from the desktop UI. The adapter probes duration without decoding the full
+  file, checks working-volume capacity, processes deterministic 15-minute chunks, removes temporary
+  PCM files, restores timestamp offsets, and skips only completed chunks whose VTT hash still
+  matches. Tool paths and installed-model records stay in the Electron device-data directory rather
+  than the synchronized Vault.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -41,10 +44,10 @@ claim that the planned 9–12 month v1 is complete.
 
 ## Not implemented yet
 
-- Automatic FFmpeg/`whisper.cpp` installation, signed model download manifests, real long-media
-  execution benchmarks, translation, and embedded time-linked media playback. The settings UI,
-  local model import, controlled execution adapter, and resumable job core are implemented, but no
-  binary or model is bundled.
+- Automatic FFmpeg/`whisper.cpp` installation, signed model download manifests, real-device
+  long-media benchmarks, translation, and embedded time-linked media playback. The settings UI,
+  local model import, controlled chunked execution, retry workflow, and interruption/disk-pressure
+  tests are implemented, but no binary or model is bundled.
 - Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
   evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
@@ -52,5 +55,6 @@ claim that the planned 9–12 month v1 is complete.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
 
-The next product increment should add a signed SHA-256 model manifest and download/resume flow, then
-run the local adapter through long-media interruption and disk-pressure tests.
+The next product increment should add the time-linked media player and transcript navigation, then
+design a signed SHA-256 model manifest and download/resume flow without weakening the current
+explicit license-acceptance boundary.

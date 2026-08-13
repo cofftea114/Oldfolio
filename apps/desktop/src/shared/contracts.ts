@@ -68,6 +68,10 @@ export interface MediaJobSummary {
   progress: number;
   updatedAt: string;
   error?: string;
+  canRetry: boolean;
+  attempts: number;
+  completedChunks: number;
+  chunkCount?: number;
 }
 
 export interface MediaTranscriptionResult {
@@ -96,5 +100,6 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
 }

@@ -17,6 +17,18 @@ export interface MediaJobCheckpoint {
   readonly progress: number;
   readonly artifactPath?: VaultPath;
   readonly artifactHash?: ContentHash;
+  readonly chunkIndex?: number;
+  readonly chunkCount?: number;
+}
+
+export interface LocalMediaTranscriptionRequest {
+  readonly kind: 'local_transcription';
+  readonly sourceTitle: string;
+  readonly importedFrom?: string;
+  readonly modelId: string;
+  readonly modelHash: ContentHash;
+  readonly language?: string;
+  readonly chunkDurationMs: number;
 }
 
 export interface MediaJobError {
@@ -35,6 +47,7 @@ export interface MediaJobRecord {
   readonly stage: MediaJobStage;
   readonly attempts: number;
   readonly checkpoints: readonly MediaJobCheckpoint[];
+  readonly request?: LocalMediaTranscriptionRequest;
   readonly transcriptSegments?: readonly AITranscriptSegment[];
   readonly outputPaths?: readonly VaultPath[];
   readonly error?: MediaJobError;

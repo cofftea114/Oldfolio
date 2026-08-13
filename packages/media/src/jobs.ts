@@ -1,13 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AITranscriptSegment, MediaJobError, MediaJobRecord, MediaJobStage } from '@oldfolio/domain';
+import type {
+  AITranscriptSegment,
+  LocalMediaTranscriptionRequest,
+  MediaJobError,
+  MediaJobRecord,
+  MediaJobStage,
+} from '@oldfolio/domain';
 
 const ACTIVE_STAGES = new Set<MediaJobStage>(['probing', 'extracting_audio', 'transcribing', 'compiling']);
 
 export interface CreateMediaJobInput {
   readonly sourceUri: string;
   readonly sourceHash: string;
+  readonly request?: LocalMediaTranscriptionRequest;
 }
 
 export class MediaJobStore {
@@ -45,6 +52,7 @@ export class MediaJobStore {
       stage: 'queued',
       attempts: 0,
       checkpoints: [{ stage: 'queued', progress: 0, updatedAt: timestamp }],
+      ...(input.request ? { request: input.request } : {}),
     };
     await this.save(job);
     return job;
@@ -66,7 +74,13 @@ export class MediaJobStore {
     id: string,
     stage: MediaJobStage,
     progress: number,
-    details: { readonly artifactPath?: string; readonly artifactHash?: string; readonly transcriptSegments?: readonly AITranscriptSegment[] } = {},
+    details: {
+      readonly artifactPath?: string;
+      readonly artifactHash?: string;
+      readonly chunkIndex?: number;
+      readonly chunkCount?: number;
+      readonly transcriptSegments?: readonly AITranscriptSegment[];
+    } = {},
   ): Promise<MediaJobRecord> {
     if (!Number.isFinite(progress) || progress < 0 || progress > 1) throw new Error('Job progress must be between 0 and 1.');
     const current = await this.get(id);
@@ -78,6 +92,8 @@ export class MediaJobStore {
       updatedAt,
       ...(details.artifactPath ? { artifactPath: details.artifactPath } : {}),
       ...(details.artifactHash ? { artifactHash: details.artifactHash } : {}),
+      ...(details.chunkIndex !== undefined ? { chunkIndex: details.chunkIndex } : {}),
+      ...(details.chunkCount !== undefined ? { chunkCount: details.chunkCount } : {}),
     };
     const { error: _previousError, ...currentWithoutError } = current;
     void _previousError;
@@ -96,6 +112,7 @@ export class MediaJobStore {
 
   async fail(id: string, error: MediaJobError): Promise<MediaJobRecord> {
     const current = await this.get(id);
+    if (current.stage === 'completed' || current.stage === 'cancelled') throw new Error('Terminal media jobs cannot fail.');
     const updatedAt = this.#now().toISOString();
     const updated: MediaJobRecord = { ...current, stage: 'failed', updatedAt, error };
     await this.save(updated);
