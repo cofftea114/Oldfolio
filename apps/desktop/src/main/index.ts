@@ -1,9 +1,15 @@
 import { join, parse } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
-import { MediaJobStore } from '@oldfolio/media';
+import {
+  MediaDeviceConfigStore,
+  MediaJobStore,
+  importLocalModel,
+  probeMediaTools,
+} from '@oldfolio/media';
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import { importCaptionFile } from './caption-import.js';
+import { transcribeMediaFile } from './media-transcription.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -15,6 +21,8 @@ import type {
 let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
 let mediaJobs: MediaJobStore | null = null;
+let mediaDeviceConfig: MediaDeviceConfigStore | null = null;
+const activeMediaTasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
@@ -33,6 +41,27 @@ function requireRepository(): VaultRepository {
 function requireMediaJobs(): MediaJobStore {
   if (!mediaJobs) throw new Error('请先打开一个 Vault');
   return mediaJobs;
+}
+
+function requireMediaDeviceConfig(): MediaDeviceConfigStore {
+  if (!mediaDeviceConfig) throw new Error('媒体设备配置尚未初始化');
+  return mediaDeviceConfig;
+}
+
+async function mediaSettingsSummary() {
+  const config = await requireMediaDeviceConfig().load();
+  const tools = await probeMediaTools(config);
+  return {
+    ...tools,
+    models: config.models.map((model) => ({
+      id: model.id,
+      sha256: model.sha256,
+      license: model.license,
+      sourceUrl: model.sourceUrl,
+      byteLength: model.byteLength,
+      importedAt: model.importedAt,
+    })),
+  };
 }
 
 async function summarizeDocument(path: string): Promise<DocumentSummary> {
@@ -184,6 +213,104 @@ function registerIpc(): void {
       transcript: await readDocument(result.transcriptPath),
     };
   });
+  ipcMain.handle('media:get-settings', async (event) => {
+    assertTrustedSender(event);
+    return mediaSettingsSummary();
+  });
+  ipcMain.handle('media:choose-tool', async (event, kind: unknown) => {
+    assertTrustedSender(event);
+    if (kind !== 'ffmpeg' && kind !== 'whisper') throw new TypeError('Invalid media tool kind');
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: kind === 'ffmpeg' ? '选择 FFmpeg 可执行文件' : '选择 whisper-cli 可执行文件',
+      properties: ['openFile'],
+      filters: process.platform === 'win32' ? [{ name: '可执行文件', extensions: ['exe'] }] : [],
+      buttonLabel: '验证并使用',
+    });
+    const executablePath = selection.filePaths[0];
+    if (selection.canceled || !executablePath) return mediaSettingsSummary();
+    const current = await requireMediaDeviceConfig().load();
+    const candidate = {
+      ...current,
+      ...(kind === 'ffmpeg' ? { ffmpegPath: executablePath } : { whisperPath: executablePath }),
+    };
+    const status = await probeMediaTools(candidate);
+    if (!(kind === 'ffmpeg' ? status.ffmpeg.available : status.whisper.available)) {
+      throw new Error(kind === 'ffmpeg' ? status.ffmpeg.error : status.whisper.error);
+    }
+    await requireMediaDeviceConfig().setTool(kind, executablePath);
+    return mediaSettingsSummary();
+  });
+  ipcMain.handle('media:import-model', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid model import request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.id !== 'string' || typeof value.license !== 'string' ||
+      typeof value.sourceUrl !== 'string' || value.licenseAccepted !== true ||
+      (value.expectedSha256 !== undefined && typeof value.expectedSha256 !== 'string')
+    ) {
+      throw new TypeError('Model id, source, license, and explicit acceptance are required');
+    }
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '导入 whisper.cpp GGML 模型',
+      properties: ['openFile'],
+      filters: [{ name: 'GGML 模型', extensions: ['bin'] }],
+      buttonLabel: '校验并导入',
+    });
+    const sourcePath = selection.filePaths[0];
+    if (selection.canceled || !sourcePath) return mediaSettingsSummary();
+    const model = await importLocalModel({
+      sourcePath,
+      modelDirectory: join(app.getPath('userData'), 'models', 'whisper.cpp'),
+      id: value.id,
+      license: value.license,
+      sourceUrl: value.sourceUrl,
+      licenseAccepted: true,
+      ...(typeof value.expectedSha256 === 'string' && value.expectedSha256 ? { expectedSha256: value.expectedSha256 } : {}),
+    });
+    await requireMediaDeviceConfig().addModel(model);
+    return mediaSettingsSummary();
+  });
+  ipcMain.handle('media:transcribe', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid transcription request');
+    const value = input as Record<string, unknown>;
+    if (typeof value.modelId !== 'string' || (value.language !== undefined && typeof value.language !== 'string')) {
+      throw new TypeError('A local model id is required');
+    }
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择本地音视频进行转录',
+      properties: ['openFile'],
+      filters: [{ name: '音视频', extensions: ['aac', 'flac', 'm4a', 'mkv', 'mov', 'mp3', 'mp4', 'mpeg', 'mpg', 'ogg', 'opus', 'wav', 'webm'] }],
+      buttonLabel: '开始本地转录',
+    });
+    const mediaPath = selection.filePaths[0];
+    if (selection.canceled || !mediaPath) return { cancelled: true };
+    const controller = new AbortController();
+    activeMediaTasks.add(controller);
+    try {
+      const result = await transcribeMediaFile(requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), {
+        mediaPath,
+        vaultRoot: requireRepository().root,
+        modelId: value.modelId,
+        ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+      }, { signal: controller.signal });
+      return { cancelled: false, jobId: result.jobId, transcript: await readDocument(result.transcriptPath) };
+    } finally {
+      activeMediaTasks.delete(controller);
+    }
+  });
+  ipcMain.handle('media:list-jobs', async (event) => {
+    assertTrustedSender(event);
+    return (await requireMediaJobs().list()).map((job) => ({
+      id: job.id,
+      sourceUri: job.sourceUri,
+      stage: job.stage,
+      progress: job.checkpoints.at(-1)?.progress ?? 0,
+      updatedAt: job.updatedAt,
+      ...(job.error ? { error: job.error.message } : {}),
+    }));
+  });
 }
 
 function createWindow(): void {
@@ -225,6 +352,7 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  mediaDeviceConfig = new MediaDeviceConfigStore(join(app.getPath('userData'), 'device', 'media.json'));
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
@@ -239,7 +367,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => repository?.close());
+app.on('before-quit', () => {
+  for (const controller of activeMediaTasks) controller.abort(new Error('Oldfolio is closing.'));
+  repository?.close();
+});
 
 const _apiShape: OldfolioDesktopApi | undefined = undefined;
 void _apiShape;

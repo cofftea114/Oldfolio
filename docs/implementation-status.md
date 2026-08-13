@@ -19,6 +19,10 @@ claim that the planned 9–12 month v1 is complete.
 - Persist media job checkpoints under the non-synchronized cache, requeue interrupted work at
   startup, execute local media tools without shell interpretation, and verify local model hashes
   and provenance before use.
+- Configure FFmpeg and `whisper-cli` per device, import user-approved GGML models with streaming
+  SHA-256 verification, copy selected media into content-addressed Vault assets, and run the local
+  transcription adapter from the desktop UI. Tool paths and installed-model records stay in the
+  Electron device-data directory rather than the synchronized Vault.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -37,9 +41,10 @@ claim that the planned 9–12 month v1 is complete.
 
 ## Not implemented yet
 
-- Automatic FFmpeg/`whisper.cpp` installation and settings UI, model download/licence acceptance,
-  real long-media execution benchmarks, translation, and embedded time-linked media playback. The
-  controlled execution adapter and resumable job core are implemented, but no model is bundled.
+- Automatic FFmpeg/`whisper.cpp` installation, signed model download manifests, real long-media
+  execution benchmarks, translation, and embedded time-linked media playback. The settings UI,
+  local model import, controlled execution adapter, and resumable job core are implemented, but no
+  binary or model is bundled.
 - Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
   evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
@@ -47,5 +52,5 @@ claim that the planned 9–12 month v1 is complete.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
 
-The next product increment should add user-configurable FFmpeg/`whisper.cpp` paths and a verified
-model-download flow, then run the implemented adapter through long-media interruption tests.
+The next product increment should add a signed SHA-256 model manifest and download/resume flow, then
+run the local adapter through long-media interruption and disk-pressure tests.

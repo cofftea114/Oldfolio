@@ -38,6 +38,44 @@ export interface CaptionImportResult {
   transcript?: VaultDocument;
 }
 
+export interface MediaToolStatus {
+  configured: boolean;
+  available: boolean;
+  path?: string;
+  version?: string;
+  error?: string;
+}
+
+export interface InstalledModelSummary {
+  id: string;
+  sha256: string;
+  license: string;
+  sourceUrl: string;
+  byteLength: number;
+  importedAt: string;
+}
+
+export interface MediaSettingsSummary {
+  ffmpeg: MediaToolStatus;
+  whisper: MediaToolStatus;
+  models: InstalledModelSummary[];
+}
+
+export interface MediaJobSummary {
+  id: string;
+  sourceUri: string;
+  stage: string;
+  progress: number;
+  updatedAt: string;
+  error?: string;
+}
+
+export interface MediaTranscriptionResult {
+  cancelled: boolean;
+  jobId?: string;
+  transcript?: VaultDocument;
+}
+
 export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
@@ -48,4 +86,15 @@ export interface OldfolioDesktopApi {
   backlinks(path: string): Promise<DocumentSummary[]>;
   importFeed(url: string): Promise<FeedImportResult>;
   importCaptions(): Promise<CaptionImportResult>;
+  getMediaSettings(): Promise<MediaSettingsSummary>;
+  chooseMediaTool(kind: 'ffmpeg' | 'whisper'): Promise<MediaSettingsSummary>;
+  importWhisperModel(input: {
+    id: string;
+    license: string;
+    sourceUrl: string;
+    licenseAccepted: boolean;
+    expectedSha256?: string;
+  }): Promise<MediaSettingsSummary>;
+  transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  listMediaJobs(): Promise<MediaJobSummary[]>;
 }

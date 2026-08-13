@@ -67,6 +67,24 @@ button { color: inherit; }
 .source-import button:disabled { opacity: .5; cursor: not-allowed; }
 .import-divider { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; color: var(--muted); font-size: 9px; }
 .import-divider::before, .import-divider::after { content: ''; height: 1px; background: var(--line); flex: 1; }
+.media-settings { margin-top: 14px; padding: 12px; border: 1px solid #cfd7d1; border-radius: 10px; background: #f6f8f5; }
+.tool-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.tool-row span, .tool-row strong, .tool-row small { display: block; min-width: 0; }
+.tool-row strong { font-size: 11px; }
+.tool-row small { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+.tool-row button, .media-settings button { border: 1px solid #ccd7d0; border-radius: 6px; padding: 6px 8px; background: #e5e9e5; color: var(--accent); cursor: pointer; font-size: 10px; }
+.media-settings details { margin: 10px 0; font-size: 10px; }
+.media-settings summary { cursor: pointer; color: var(--accent); font-weight: 650; }
+.media-settings input, .media-settings select { width: 100%; margin-top: 6px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); font-size: 10px; }
+.media-settings .accept-license { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.media-settings .accept-license input { width: auto; margin: 1px 0 0; }
+.field-label { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; }
+.media-settings .transcribe-button { width: 100%; margin-top: 10px; background: var(--accent); color: white; }
+.media-settings button:disabled { opacity: .45; cursor: not-allowed; }
+.job-row { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 6px; margin-top: 8px; font-size: 9px; }
+.job-row progress { width: 100%; accent-color: var(--accent); }
+.job-row small { grid-column: 1 / -1; color: #a3483f; }
+.media-error { color: #a3483f; font-size: 9px; line-height: 1.4; }
 .file-section { margin-top: 22px; }
 .section-label { display: flex; align-items: center; gap: 6px; margin: 0 5px 9px; }
 .section-label span { margin-left: auto; font-variant-numeric: tabular-nums; }

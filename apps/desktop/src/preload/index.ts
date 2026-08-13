@@ -12,6 +12,11 @@ const api: OldfolioDesktopApi = {
   backlinks: (path) => ipcRenderer.invoke('vault:backlinks', path),
   importFeed: (url) => ipcRenderer.invoke('source:import-feed', url),
   importCaptions: () => ipcRenderer.invoke('media:import-captions'),
+  getMediaSettings: () => ipcRenderer.invoke('media:get-settings'),
+  chooseMediaTool: (kind) => ipcRenderer.invoke('media:choose-tool', kind),
+  importWhisperModel: (input) => ipcRenderer.invoke('media:import-model', input),
+  transcribeMedia: (input) => ipcRenderer.invoke('media:transcribe', input),
+  listMediaJobs: () => ipcRenderer.invoke('media:list-jobs'),
 };
 
 contextBridge.exposeInMainWorld('oldfolio', api);

@@ -10,12 +10,15 @@ import {
   Captions,
   Radio,
   Search,
+  Settings2,
   Sparkles,
   Tags,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   DocumentSummary,
+  MediaJobSummary,
+  MediaSettingsSummary,
   SearchHit,
   VaultDocument,
   VaultSummary,
@@ -38,6 +41,16 @@ export function App() {
   const [feedUrl, setFeedUrl] = useState('');
   const [importError, setImportError] = useState('');
   const [importing, setImporting] = useState(false);
+  const [mediaSettingsOpen, setMediaSettingsOpen] = useState(false);
+  const [mediaSettings, setMediaSettings] = useState<MediaSettingsSummary | null>(null);
+  const [mediaJobs, setMediaJobs] = useState<MediaJobSummary[]>([]);
+  const [modelId, setModelId] = useState('base');
+  const [modelLicense, setModelLicense] = useState('');
+  const [modelSource, setModelSource] = useState('https://huggingface.co/ggerganov/whisper.cpp');
+  const [modelSha256, setModelSha256] = useState('');
+  const [modelAccepted, setModelAccepted] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [mediaLanguage, setMediaLanguage] = useState('auto');
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -106,6 +119,87 @@ export function App() {
     }
   };
 
+  const refreshMedia = useCallback(async () => {
+    const [settings, jobs] = await Promise.all([
+      window.oldfolio.getMediaSettings(),
+      vault ? window.oldfolio.listMediaJobs() : Promise.resolve([]),
+    ]);
+    setMediaSettings(settings);
+    setMediaJobs(jobs);
+    setSelectedModel((current) => current || settings.models[0]?.id || '');
+  }, [vault]);
+
+  const toggleMediaSettings = async () => {
+    const next = !mediaSettingsOpen;
+    setMediaSettingsOpen(next);
+    if (next) {
+      try {
+        await refreshMedia();
+      } catch (error: unknown) {
+        setImportError(error instanceof Error ? error.message : '无法读取媒体配置');
+      }
+    }
+  };
+
+  const chooseMediaTool = async (kind: 'ffmpeg' | 'whisper') => {
+    setImportError('');
+    try {
+      setMediaSettings(await window.oldfolio.chooseMediaTool(kind));
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '工具验证失败');
+    }
+  };
+
+  const importModel = async () => {
+    if (!modelAccepted) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      const settings = await window.oldfolio.importWhisperModel({
+        id: modelId,
+        license: modelLicense,
+        sourceUrl: modelSource,
+        licenseAccepted: modelAccepted,
+        ...(modelSha256.trim() ? { expectedSha256: modelSha256.trim() } : {}),
+      });
+      setMediaSettings(settings);
+      setSelectedModel(settings.models.at(-1)?.id ?? '');
+      setStatus('本地模型已校验并导入');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '模型导入失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const transcribeMedia = async () => {
+    if (!vault || !selectedModel || importing) return;
+    setImporting(true);
+    setImportError('');
+    setStatus('正在本地转录，关闭应用后可在下次启动恢复状态…');
+    const poll = window.setInterval(() => void window.oldfolio.listMediaJobs().then(setMediaJobs), 1_000);
+    try {
+      const result = await window.oldfolio.transcribeMedia({
+        modelId: selectedModel,
+        ...(mediaLanguage.trim() ? { language: mediaLanguage.trim() } : {}),
+      });
+      if (result.cancelled || !result.transcript) {
+        setStatus('已取消转录');
+        return;
+      }
+      await loadDocuments();
+      await openDocument(result.transcript.path);
+      setStatus('本地转录笔记已生成');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '本地转录失败');
+      setStatus('本地转录失败，任务状态已保留');
+    } finally {
+      window.clearInterval(poll);
+      await refreshMedia();
+      setImporting(false);
+    }
+  };
+
   useEffect(() => {
     const timeout = window.setTimeout(async () => {
       if (!active || draft === active.content) return;
@@ -157,6 +251,11 @@ export function App() {
           title="导入 RSS / Podcast"
           onClick={() => setImportOpen((value) => !value)}
         ><Radio /></button>
+        <button
+          className={mediaSettingsOpen ? 'rail-button active' : 'rail-button'}
+          title="本地媒体设置"
+          onClick={() => void toggleMediaSettings()}
+        ><Settings2 /></button>
         <div className="rail-spacer" />
         <button className="rail-button" title="打开 Vault" onClick={() => void openVault(false)}><FolderOpen /></button>
       </aside>
@@ -190,6 +289,47 @@ export function App() {
               <Captions size={14} /> 导入 SRT / VTT 字幕
             </button>
           </form>
+        )}
+        {mediaSettingsOpen && (
+          <section className="media-settings">
+            <div className="section-label"><Settings2 size={14} /> 本地转录</div>
+            <div className="tool-row">
+              <span><strong>FFmpeg</strong><small>{mediaSettings?.ffmpeg.version ?? '未配置'}</small></span>
+              <button onClick={() => void chooseMediaTool('ffmpeg')}>{mediaSettings?.ffmpeg.available ? '更换' : '选择'}</button>
+            </div>
+            <div className="tool-row">
+              <span><strong>whisper-cli</strong><small>{mediaSettings?.whisper.version ?? '未配置'}</small></span>
+              <button onClick={() => void chooseMediaTool('whisper')}>{mediaSettings?.whisper.available ? '更换' : '选择'}</button>
+            </div>
+            <details>
+              <summary>导入 GGML 模型</summary>
+              <input value={modelId} onChange={(event) => setModelId(event.target.value)} placeholder="模型 ID，例如 base" />
+              <input value={modelLicense} onChange={(event) => setModelLicense(event.target.value)} placeholder="许可证标识" />
+              <input value={modelSource} onChange={(event) => setModelSource(event.target.value)} placeholder="HTTPS 来源地址" type="url" />
+              <input value={modelSha256} onChange={(event) => setModelSha256(event.target.value)} placeholder="可信 SHA-256（可选）" />
+              <label className="accept-license"><input checked={modelAccepted} onChange={(event) => setModelAccepted(event.target.checked)} type="checkbox" /> 我已审阅并接受该模型许可证</label>
+              <button disabled={!modelAccepted || !modelId.trim() || !modelLicense.trim() || !modelSource.trim() || importing} onClick={() => void importModel()}>选择模型文件并导入</button>
+            </details>
+            <label className="field-label">模型
+              <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
+                <option value="">未安装模型</option>
+                {mediaSettings?.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
+              </select>
+            </label>
+            <label className="field-label">语言
+              <input value={mediaLanguage} onChange={(event) => setMediaLanguage(event.target.value)} placeholder="auto / zh / en" />
+            </label>
+            <button className="transcribe-button" disabled={!vault || !selectedModel || !mediaSettings?.ffmpeg.available || !mediaSettings.whisper.available || importing} onClick={() => void transcribeMedia()}>
+              {importing ? '处理中…' : '选择音视频并转录'}
+            </button>
+            {mediaJobs.slice(0, 3).map((job) => (
+              <div className="job-row" key={job.id}>
+                <span>{job.stage}</span><progress max="1" value={job.progress} />
+                {job.error && <small>{job.error}</small>}
+              </div>
+            ))}
+            {importError && <p className="media-error" role="alert">{importError}</p>}
+          </section>
         )}
         <div className="file-section">
           <div className="section-label">笔记 <span>{documents.length}</span></div>
