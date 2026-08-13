@@ -16,7 +16,7 @@ describe('Electron main-process bundle', () => {
     const result = spawnSync(process.execPath, [script], { encoding: 'utf8' });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('contains no unresolved @oldfolio workspace imports');
+    expect(result.stdout).toContain('use a sandbox-compatible preload');
   });
 
   it('loads the packaged main process and renderer in Electron', () => {

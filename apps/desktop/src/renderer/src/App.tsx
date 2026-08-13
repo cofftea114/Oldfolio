@@ -335,12 +335,14 @@ export function App() {
             </div>
             <details>
               <summary>导入 GGML 模型</summary>
+              <p className="model-help">先从 whisper.cpp 官方模型页下载 <code>ggml-*.bin</code>。多语言内容建议从 <code>base</code> 开始；<code>*.en</code> 仅适合英语。填写来源和实际许可证，确认后选择本地 .bin 文件。</p>
               <input value={modelId} onChange={(event) => setModelId(event.target.value)} placeholder="模型 ID，例如 base" />
               <input value={modelLicense} onChange={(event) => setModelLicense(event.target.value)} placeholder="许可证标识" />
               <input value={modelSource} onChange={(event) => setModelSource(event.target.value)} placeholder="HTTPS 来源地址" type="url" />
               <input value={modelSha256} onChange={(event) => setModelSha256(event.target.value)} placeholder="可信 SHA-256（可选）" />
               <label className="accept-license"><input checked={modelAccepted} onChange={(event) => setModelAccepted(event.target.checked)} type="checkbox" /> 我已审阅并接受该模型许可证</label>
               <button disabled={!modelAccepted || !modelId.trim() || !modelLicense.trim() || !modelSource.trim() || importing} onClick={() => void importModel()}>选择模型文件并导入</button>
+              <small className="model-help-note">SHA-256 可留空；只有你从可信渠道取得 64 位 SHA-256 时才填写。官方模型表目前列出的是 40 位 SHA-1，不能填入此框。</small>
             </details>
             <label className="field-label">模型
               <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>

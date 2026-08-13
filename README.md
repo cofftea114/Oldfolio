@@ -38,3 +38,19 @@ The first desktop launch may download the Electron runtime. `pnpm dev` performs 
 electron-vite starts, so an interrupted initial download can be retried safely.
 
 No Oldfolio account or hosted service is required. Secrets must never be written into a vault.
+
+## Local transcription setup
+
+1. Configure an FFmpeg executable. `ffprobe` must be installed beside it (`ffprobe.exe` on Windows).
+2. Configure the `whisper-cli` executable built or installed from whisper.cpp.
+3. Download a converted `ggml-*.bin` model from the
+   [official whisper.cpp model instructions](https://github.com/ggml-org/whisper.cpp/blob/master/models/README.md).
+   Multilingual `base` is a practical first model; names ending in `.en` are English-only.
+4. In **Local transcription → Import GGML model**, use a short ID such as `base`, enter the model's
+   source URL and actual licence, explicitly accept that licence, then select the downloaded `.bin`.
+5. The SHA-256 field is optional. Fill it only when a trusted source supplies a 64-character
+   SHA-256 value. The upstream model table currently displays 40-character SHA-1 values, which are
+   not valid in that field.
+
+Oldfolio copies the selected model into device-local application data, verifies its SHA-256 during
+import and before transcription, and never stores the model or its path in the Vault.

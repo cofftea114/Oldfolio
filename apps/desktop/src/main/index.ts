@@ -375,7 +375,7 @@ function createWindow(): void {
     show: !startupProbe,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.mjs'),
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -387,8 +387,22 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   if (startupProbe) {
     mainWindow.webContents.once('did-finish-load', () => {
-      console.log('Oldfolio desktop startup probe passed.');
-      app.quit();
+      void mainWindow?.webContents.executeJavaScript(`(() => {
+        const api = window.oldfolio;
+        const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel'];
+        return Boolean(api) && required.every((name) => typeof api[name] === 'function');
+      })()`).then((bridgeReady) => {
+        if (!bridgeReady) {
+          console.error('Oldfolio desktop startup probe failed: preload bridge is unavailable.');
+          app.exit(1);
+          return;
+        }
+        console.log('Oldfolio desktop startup probe passed.');
+        app.quit();
+      }).catch((error: unknown) => {
+        console.error(`Oldfolio desktop startup probe failed: ${error instanceof Error ? error.message : String(error)}`);
+        app.exit(1);
+      });
     });
     mainWindow.webContents.once('did-fail-load', (_event, code, description) => {
       console.error(`Oldfolio desktop startup probe failed: ${code} ${description}`);
