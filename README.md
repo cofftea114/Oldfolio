@@ -10,7 +10,7 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Lossless native Markdown vault and strict OKF v0.2 bundle validation.
 - Rebuildable local search and link graph.
 - Local Ollama/LM Studio transcript summaries with automatic template selection, timestamp evidence,
-  reviewable revision-bound change sets, approval, and atomic undo.
+  context-safe hierarchical reduction, reviewable revision-bound change sets, approval, and atomic undo.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
 - Provider contracts for local/BYOK AI.
 - Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
@@ -72,7 +72,9 @@ burned-in subtitles require a future OCR pipeline.
 3. Select **Detect local models**, choose a chat model, and save the device configuration.
 4. Open an Oldfolio-generated Transcript and select **Prepare summary**. Review the exact JSON
    payload, local destination, model, automatic template, estimated input size, and zero remote
-   service cost before sending it.
+   service cost before sending it. If the transcript does not fit a typical 8K local-model context,
+   Oldfolio shows the estimated call count and summarizes it in bounded batches before merging the
+   results while preserving the original timestamp evidence IDs.
 5. Review the generated OKF `Synthesis` document and diff. Nothing is written until **Approve and
    write to Vault** is selected; the resulting write can be atomically undone while unchanged.
 

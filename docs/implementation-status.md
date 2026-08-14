@@ -40,8 +40,10 @@ claim that the planned 9–12 month v1 is complete.
 - Configure a loopback-only Ollama or LM Studio OpenAI-compatible endpoint and model in device-local
   settings. Root URLs are normalized to `/api/` or `/v1/` according to the selected provider. For generated
   Transcript notes, automatically select a summary template, disclose the exact untrusted-data
-  payload and estimated input size, require timestamp evidence for every generated claim, preview
-  the complete OKF `Synthesis` content and diff, and apply or undo the resulting L1/L2 change set.
+  payload, estimated input size, and direct/hierarchical processing plan. Long inputs within the
+  200,000-character safety limit are summarized in bounded sequential batches and pairwise merged,
+  with original evidence IDs validated at every level. Preview the complete OKF `Synthesis` content
+  and diff, and apply or undo the resulting L1/L2 change set.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.
 
@@ -69,9 +71,9 @@ claim that the planned 9–12 month v1 is complete.
 - Production WebDAV transport and folder-sync conflict UI.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
-- Hierarchical summarization for transcripts above the current 200,000-character safety limit,
-  summary translation, AI chat, and reusable concept extraction across multiple transcripts.
+- Processing transcripts above the current 200,000-character safety limit, summary translation,
+  AI chat, and reusable concept extraction across multiple transcripts.
 
-The next product increment should add hierarchical long-transcript summarization and reusable
-Concept extraction, then connect OS credential stores for OpenAI-compatible BYOK without weakening
+The next product increment should add reusable Concept extraction and summary translation, then
+connect OS credential stores for OpenAI-compatible BYOK without weakening
 the current payload-disclosure and no-secret-in-Vault boundaries.

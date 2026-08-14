@@ -35,6 +35,38 @@ export class AIProviderError extends Error {
   }
 }
 
+function safeProviderErrorMessage(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as { readonly error?: unknown; readonly message?: unknown };
+  const nested = typeof record.error === 'object' && record.error !== null
+    ? (record.error as { readonly message?: unknown }).message
+    : undefined;
+  const message = typeof nested === 'string'
+    ? nested
+    : typeof record.message === 'string'
+      ? record.message
+      : undefined;
+  const sanitized = message
+    ? [...message]
+      .map((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return codePoint < 32 || codePoint === 127 ? ' ' : character;
+      })
+      .join('')
+      .replaceAll(/\s+/gu, ' ')
+      .trim()
+    : undefined;
+  return sanitized ? sanitized.slice(0, 500) : undefined;
+}
+
+async function readProviderErrorMessage(response: Response): Promise<string | undefined> {
+  try {
+    return safeProviderErrorMessage(JSON.parse(await response.text()) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
 abstract class HttpAIProvider implements AIProvider {
   abstract readonly id: string;
   abstract readonly displayName: string;
@@ -90,7 +122,11 @@ abstract class HttpAIProvider implements AIProvider {
       throw new AIProviderError('AI endpoint redirects are disabled to prevent credential disclosure.', response.status);
     }
     if (!response.ok) {
-      throw new AIProviderError(`AI provider request failed with status ${response.status}.`, response.status);
+      const detail = await readProviderErrorMessage(response);
+      throw new AIProviderError(
+        `AI provider request failed with status ${response.status}${detail ? `: ${detail}` : '.'}`,
+        response.status,
+      );
     }
     try {
       return (await response.json()) as unknown;

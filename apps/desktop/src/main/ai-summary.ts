@@ -40,6 +40,8 @@ export interface AISummaryPreparation {
   readonly segmentCount: number;
   readonly sourceCharacters: number;
   readonly estimatedInputTokens: number;
+  readonly processingMode: 'direct' | 'hierarchical';
+  readonly estimatedModelCalls: number;
   readonly endpoint: string;
   readonly model: string;
   readonly providerId: LocalAIProviderId;
@@ -188,6 +190,8 @@ export class AISummaryService {
       segmentCount: prepared.evidence.length,
       sourceCharacters: prepared.sourceCharacters,
       estimatedInputTokens: prepared.estimatedInputTokens,
+      processingMode: prepared.processingMode,
+      estimatedModelCalls: prepared.estimatedModelCalls,
       endpoint: config.endpoint,
       model: config.model,
       providerId: config.providerId,

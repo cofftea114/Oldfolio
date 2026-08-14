@@ -44,6 +44,27 @@ describe('AI security boundaries', () => {
     expect(JSON.stringify(provider)).not.toContain('do-not-persist');
   });
 
+  it('reports a bounded provider error message without echoing unrelated response data', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        type: 'exceed_context_size_error',
+        message: 'request (17598 tokens) exceeds the available context size (8192 tokens)',
+      },
+      privatePrompt: 'must-not-be-echoed',
+    }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['models.example.test'] },
+      fetch: fetchMock,
+    });
+
+    const completion = provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://models.example.test/v1/', model: 'test',
+    }, { model: 'test', messages: [{ role: 'user', content: 'hello' }] });
+
+    await expect(completion).rejects.toThrow(/17598 tokens.*8192 tokens/u);
+    await expect(completion).rejects.not.toThrow(/must-not-be-echoed/u);
+  });
+
   it('rejects insecure and unconfirmed custom HTTP endpoints', () => {
     expect(() => validateAIEndpoint('http://models.example.test/v1')).toThrow(EndpointPolicyError);
     expect(() => validateAIEndpoint('https://models.example.test/v1')).toThrow(/not been explicitly confirmed/);
@@ -190,5 +211,56 @@ describe('AI security boundaries', () => {
     await expect(generateTranscriptSummary(provider, {
       providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
     }, prepared)).rejects.toThrow(/unknown transcript evidence/);
+  });
+
+  it('summarizes transcripts larger than a local model context window in bounded evidence-preserving calls', async () => {
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/long-lesson.md',
+      sourceRevision: 'revision-long',
+      title: 'Long local-model lesson',
+      resource: 'assets/media/long-lesson.mp4',
+      segments: Array.from({ length: 24 }, (_, index) => ({
+        startMs: index * 30_000,
+        text: `Section ${index + 1}: ${'evidence and explanation '.repeat(28)}`,
+      })),
+    });
+    const calls: number[] = [];
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        const promptCharacters = request.messages.reduce((total, message) => total + message.content.length, 0);
+        calls.push(promptCharacters);
+        if (promptCharacters > 8_000) throw new Error(`context limit exceeded: ${promptCharacters}`);
+        const evidenceIds = [...new Set(request.messages
+          .flatMap((message) => message.content.match(/segment-\d{5}/gu) ?? []))];
+        const firstEvidenceId = evidenceIds[0];
+        if (!firstEvidenceId) throw new Error('The request did not contain source evidence.');
+        return Promise.resolve({
+          content: JSON.stringify({
+            title: 'Long lesson summary',
+            overview: { text: 'Supported overview. '.repeat(50), evidenceIds: [firstEvidenceId] },
+            keyPoints: Array.from({ length: 8 }, () => ({
+              text: 'Supported point. '.repeat(30), evidenceIds: [firstEvidenceId],
+            })),
+            concepts: Array.from({ length: 4 }, (_, conceptIndex) => ({
+              name: `Concept ${conceptIndex + 1}`,
+              explanation: 'Supported explanation. '.repeat(24),
+              evidenceIds: [firstEvidenceId],
+            })),
+          }),
+          model: 'test-model', finishReason: 'stop',
+          usage: { inputTokens: 100, outputTokens: 20 },
+        });
+      },
+    };
+
+    const generated = await generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
+    }, prepared);
+
+    expect(calls.length).toBeGreaterThan(1);
+    expect(Math.max(...calls)).toBeLessThanOrEqual(8_000);
+    expect(generated.summary.overview.evidenceIds[0]).toMatch(/^segment-/u);
+    expect(generated.completion.usage).toEqual({ inputTokens: calls.length * 100, outputTokens: calls.length * 20 });
   });
 });

@@ -129,6 +129,8 @@ export interface AISummaryPreparation {
   segmentCount: number;
   sourceCharacters: number;
   estimatedInputTokens: number;
+  processingMode: 'direct' | 'hierarchical';
+  estimatedModelCalls: number;
   endpoint: string;
   model: string;
   providerId: AILocalProviderId;

@@ -661,6 +661,9 @@ export function App() {
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
+                  <div><dt>处理方式</dt><dd>{summaryPreparation.processingMode === 'hierarchical'
+                    ? `分层摘要（预计 ${summaryPreparation.estimatedModelCalls} 次本地调用）`
+                    : '单次摘要'}</dd></div>
                   <div><dt>预计费用</dt><dd>¥0（本地）</dd></div>
                 </dl>
                 <label className="field-label">摘要模板
