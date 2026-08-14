@@ -198,7 +198,7 @@ export function App() {
       }
       await loadDocuments();
       await openDocument(result.transcript.path);
-      setStatus('本地转录笔记已生成');
+      setStatus(result.transcriptSource === 'embedded_subtitle' ? '已提取内嵌字幕并生成笔记' : '本地语音转录笔记已生成');
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '本地转录失败');
       setStatus('本地转录失败，任务状态已保留');
@@ -221,7 +221,7 @@ export function App() {
         await loadDocuments();
         await openDocument(result.transcript.path);
       }
-      setStatus('媒体转录已恢复并完成');
+      setStatus(result.transcriptSource === 'embedded_subtitle' ? '已从内嵌字幕恢复生成笔记' : '媒体语音转录已恢复并完成');
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '恢复媒体任务失败');
       setStatus('恢复失败，已完成分块仍会保留');
@@ -356,6 +356,7 @@ export function App() {
             <button className="transcribe-button" disabled={!vault || !selectedModel || !mediaSettings?.ffmpeg.available || !mediaSettings.whisper.available || importing} onClick={() => void transcribeMedia()}>
               {importing ? '处理中…' : '选择音视频并转录'}
             </button>
+            <small className="model-help-note">视频包含 ASS、SRT、mov_text 或 WebVTT 文本字幕时会优先提取；没有可用文本字幕时才运行 Whisper。</small>
             {mediaJobs.slice(0, 3).map((job) => (
               <div className="job-row" key={job.id}>
                 <span>{job.stage}</span><progress max="1" value={job.progress} />

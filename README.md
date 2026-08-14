@@ -54,3 +54,9 @@ No Oldfolio account or hosted service is required. Secrets must never be written
 
 Oldfolio copies the selected model into device-local application data, verifies its SHA-256 during
 import and before transcription, and never stores the model or its path in the Vault.
+
+For video containers, Oldfolio probes embedded subtitle streams first. Text tracks such as ASS,
+SubRip/SRT, mov_text, and WebVTT are converted to WebVTT and used directly with their original
+timestamps. The preferred language wins, followed by the default text track. Bitmap tracks such as
+PGS, VobSub/DVD, and DVB subtitles are recorded as detected but currently fall back to Whisper;
+burned-in subtitles require a future OCR pipeline.

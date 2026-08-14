@@ -78,6 +78,7 @@ export interface MediaTranscriptionResult {
   cancelled: boolean;
   jobId?: string;
   transcript?: VaultDocument;
+  transcriptSource?: 'embedded_subtitle' | 'speech_recognition';
 }
 
 export interface TranscriptPlaybackSegment {

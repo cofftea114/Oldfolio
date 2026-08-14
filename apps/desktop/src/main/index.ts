@@ -301,7 +301,12 @@ function registerIpc(): void {
         modelId: value.modelId,
         ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
       }, { signal: controller.signal });
-      return { cancelled: false, jobId: result.jobId, transcript: await readDocument(result.transcriptPath) };
+      return {
+        cancelled: false,
+        jobId: result.jobId,
+        transcriptSource: result.transcriptSource,
+        transcript: await readDocument(result.transcriptPath),
+      };
     } finally {
       activeMediaTasks.delete(controller);
     }
@@ -340,7 +345,12 @@ function registerIpc(): void {
         jobId,
         { signal: controller.signal },
       );
-      return { cancelled: false, jobId: result.jobId, transcript: await readDocument(result.transcriptPath) };
+      return {
+        cancelled: false,
+        jobId: result.jobId,
+        transcriptSource: result.transcriptSource,
+        transcript: await readDocument(result.transcriptPath),
+      };
     } finally {
       activeMediaTasks.delete(controller);
     }

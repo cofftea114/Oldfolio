@@ -1,6 +1,7 @@
 export * from './captions.js';
 export * from './asset-import.js';
 export * from './device-config.js';
+export * from './embedded-subtitles.js';
 export * from './jobs.js';
 export * from './media-analysis.js';
 export * from './model-store.js';

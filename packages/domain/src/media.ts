@@ -4,6 +4,7 @@ import type { AITranscriptSegment } from './ai.js';
 export type MediaJobStage =
   | 'queued'
   | 'probing'
+  | 'extracting_subtitles'
   | 'extracting_audio'
   | 'transcribing'
   | 'compiling'

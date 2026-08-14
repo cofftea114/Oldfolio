@@ -30,6 +30,10 @@ claim that the planned 9–12 month v1 is complete.
   timeline. A private streaming protocol supports byte ranges while authorizing only
   content-addressed `assets/media/` files in the currently open Vault; arbitrary paths and ordinary
   Markdown links cannot use it.
+- Probe embedded subtitle streams before speech recognition, classify text versus bitmap codecs,
+  select a preferred/default language track, and convert supported text subtitles to WebVTT while
+  preserving timestamps. The generated Source records all detected tracks and the chosen transcript
+  provenance; extraction failures and media without text subtitles fall back to Whisper.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -52,6 +56,7 @@ claim that the planned 9–12 month v1 is complete.
   long-media benchmarks, translation, and advanced waveform/chapter editing. The settings UI,
   local model import, controlled chunked execution, retry workflow, and interruption/disk-pressure
   tests are implemented, but no binary or model is bundled.
+- OCR for burned-in subtitles and bitmap tracks such as PGS, VobSub/DVD, and DVB subtitles.
 - Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
   evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.

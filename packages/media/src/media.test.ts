@@ -8,6 +8,11 @@ import { parseOkfDocument } from '@oldfolio/okf';
 import { importMediaAsset } from './asset-import.js';
 import { CaptionParseError, parseCaptions } from './captions.js';
 import { MediaDeviceConfigStore, probeMediaTools } from './device-config.js';
+import {
+  extractEmbeddedTextSubtitle,
+  probeEmbeddedSubtitleTracks,
+  selectEmbeddedTextSubtitle,
+} from './embedded-subtitles.js';
 import { MediaJobStore } from './jobs.js';
 import {
   InsufficientDiskSpaceError,
@@ -128,6 +133,47 @@ describe('persistent media jobs', () => {
 });
 
 describe('local media tool boundary', () => {
+  it('detects embedded subtitle kinds and selects the preferred text language', async () => {
+    const tracks = await probeEmbeddedSubtitleTracks('C:/vault/movie.mkv', 'C:/tools/ffmpeg.exe', () => Promise.resolve({
+      exitCode: 0,
+      stdout: JSON.stringify({ streams: [
+        { index: 2, codec_name: 'hdmv_pgs_subtitle', codec_type: 'subtitle', tags: { language: 'zho' }, disposition: { default: 1 } },
+        { index: 3, codec_name: 'ass', codec_type: 'subtitle', tags: { language: 'eng', title: 'English' }, disposition: { default: 1 } },
+        { index: 4, codec_name: 'subrip', codec_type: 'subtitle', tags: { language: 'chi' }, disposition: { default: 0 } },
+      ] }),
+      stderr: '',
+    }));
+    expect(tracks).toMatchObject([
+      { index: 2, kind: 'bitmap', language: 'zho' },
+      { index: 3, kind: 'text', language: 'eng', title: 'English' },
+      { index: 4, kind: 'text', language: 'chi' },
+    ]);
+    expect(selectEmbeddedTextSubtitle(tracks, 'zh')).toMatchObject({ index: 4, language: 'chi' });
+    expect(selectEmbeddedTextSubtitle(tracks, 'en')).toMatchObject({ index: 3, language: 'eng' });
+    expect(selectEmbeddedTextSubtitle(tracks.filter((track) => track.kind === 'bitmap'))).toBeNull();
+  });
+
+  it('extracts a selected text subtitle track as timestamped WebVTT', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-embedded-subtitle-'));
+    roots.push(root);
+    const outputPath = join(root, 'embedded.vtt');
+    const calls: string[][] = [];
+    const transcript = await extractEmbeddedTextSubtitle(
+      join(root, 'movie.mkv'),
+      'C:/tools/ffmpeg.exe',
+      { index: 3, codec: 'ass', kind: 'text', language: 'zho', default: true, forced: false },
+      outputPath,
+      async (request) => {
+        calls.push([...request.args]);
+        await writeFile(outputPath, 'WEBVTT\n\n00:01.000 --> 00:03.000\nEmbedded evidence');
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    );
+    expect(calls[0]).toContain('0:3');
+    expect(calls[0]).toContain('webvtt');
+    expect(transcript).toMatchObject({ language: 'zho', segments: [{ startMs: 1_000, endMs: 3_000, text: 'Embedded evidence' }] });
+  });
+
   it('probes duration and plans deterministic chunks without decoding the full media', async () => {
     const calls: string[] = [];
     const duration = await probeMediaDuration('C:/vault/talk.mp4', 'C:/tools/ffmpeg.exe', (request) => {

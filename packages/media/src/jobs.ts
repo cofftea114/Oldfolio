@@ -9,7 +9,7 @@ import type {
   MediaJobStage,
 } from '@oldfolio/domain';
 
-const ACTIVE_STAGES = new Set<MediaJobStage>(['probing', 'extracting_audio', 'transcribing', 'compiling']);
+const ACTIVE_STAGES = new Set<MediaJobStage>(['probing', 'extracting_subtitles', 'extracting_audio', 'transcribing', 'compiling']);
 
 export interface CreateMediaJobInput {
   readonly sourceUri: string;
