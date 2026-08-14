@@ -8,8 +8,11 @@ import {
   createPromptDataBoundary,
   createWikiChangeSet,
   parseStructuredOutput,
+  generateTranscriptSummary,
+  prepareTranscriptSummary,
   validateAIEndpoint,
 } from './index.js';
+import type { AIProvider } from '@oldfolio/domain';
 
 describe('AI security boundaries', () => {
   it('never serializes an invocation secret or retains it on the provider', async () => {
@@ -123,5 +126,69 @@ describe('AI security boundaries', () => {
         citations: [],
       }),
     ).rejects.toThrow(/L3 or higher/);
+  });
+
+  it('generates a template-aware transcript summary whose claims cite known evidence', async () => {
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/lesson.md',
+      sourceRevision: 'revision-1',
+      title: '安装教程：三个步骤',
+      resource: 'assets/media/lesson.mp4',
+      segments: [
+        { startMs: 1_000, text: '第一步先备份配置。' },
+        { startMs: 8_000, text: '第二步执行安装，然后检查版本。' },
+      ],
+    });
+    expect(prepared.suggestedTemplate).toBe('tutorial');
+    const provider: AIProvider = {
+      id: 'test',
+      displayName: 'Test',
+      capabilities: ['chat'],
+      listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        expect(request.messages[0]?.content).toContain('untrusted data');
+        expect(request.messages.at(-1)?.content).toContain('segment-00001');
+        return Promise.resolve({
+          content: JSON.stringify({
+            title: '安装步骤摘要',
+            overview: { text: '先备份，再安装并验证。', evidenceIds: ['segment-00001', 'segment-00002'] },
+            keyPoints: [{ text: '安装前备份配置。', evidenceIds: ['segment-00001'] }],
+            concepts: [{ name: '安装验证', explanation: '安装后检查版本。', evidenceIds: ['segment-00002'] }],
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        });
+      },
+    };
+    const generated = await generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
+    }, prepared);
+    expect(generated.template).toBe('tutorial');
+    expect(generated.summary.keyPoints[0]?.evidenceIds).toEqual(['segment-00001']);
+  });
+
+  it('rejects summary claims that cite evidence the transcript did not provide', async () => {
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/lesson.md',
+      sourceRevision: 'revision-1',
+      title: 'Lesson',
+      resource: 'assets/media/lesson.mp4',
+      segments: [{ startMs: 1_000, text: 'Evidence.' }],
+    });
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: () => Promise.resolve({
+        content: JSON.stringify({
+          title: 'Invalid',
+          overview: { text: 'Unsupported.', evidenceIds: ['segment-99999'] },
+          keyPoints: [{ text: 'Evidence.', evidenceIds: ['segment-00001'] }],
+          concepts: [],
+        }),
+        model: 'test-model', finishReason: 'stop',
+      }),
+    };
+    await expect(generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
+    }, prepared)).rejects.toThrow(/unknown transcript evidence/);
   });
 });

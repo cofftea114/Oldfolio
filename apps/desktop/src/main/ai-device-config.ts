@@ -1,0 +1,78 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+import { validateAIEndpoint } from '@oldfolio/ai';
+
+export interface AIDeviceConfig {
+  readonly version: 1;
+  readonly providerId: 'ollama';
+  readonly endpoint: string;
+  readonly model: string;
+}
+
+const DEFAULT_CONFIG: AIDeviceConfig = {
+  version: 1,
+  providerId: 'ollama',
+  endpoint: 'http://127.0.0.1:11434/api/',
+  model: '',
+};
+
+function isLoopback(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+  return normalized === 'localhost' || normalized === '::1' || normalized.startsWith('127.');
+}
+
+export function normalizeLocalOllamaEndpoint(value: string): string {
+  if (!value.trim() || value.length > 2_048 || value.includes('\0')) throw new Error('Ollama 地址无效。');
+  let candidate: URL;
+  try {
+    candidate = new URL(value.trim());
+  } catch {
+    throw new Error('Ollama 地址无效。');
+  }
+  if (!isLoopback(candidate.hostname)) throw new Error('当前版本只允许连接本机 Ollama。');
+  const url = validateAIEndpoint(value.trim(), { allowLocalhostHttp: true });
+  if (url.search) throw new Error('Ollama 地址不能包含查询参数。');
+  if (url.pathname === '/') url.pathname = '/api/';
+  if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
+  return url.href;
+}
+
+function parseConfig(source: string): AIDeviceConfig {
+  const value = JSON.parse(source) as Partial<AIDeviceConfig>;
+  if (value.version !== 1 || value.providerId !== 'ollama') throw new Error('AI 设备配置无效。');
+  if (typeof value.endpoint !== 'string' || typeof value.model !== 'string' || value.model.length > 256 || value.model.includes('\0')) {
+    throw new Error('AI 设备配置无效。');
+  }
+  return {
+    version: 1,
+    providerId: 'ollama',
+    endpoint: normalizeLocalOllamaEndpoint(value.endpoint),
+    model: value.model.trim(),
+  };
+}
+
+export class AIDeviceConfigStore {
+  constructor(readonly filePath: string) {}
+
+  async load(): Promise<AIDeviceConfig> {
+    try {
+      return parseConfig(await readFile(this.filePath, 'utf8'));
+    } catch (error: unknown) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return DEFAULT_CONFIG;
+      throw error;
+    }
+  }
+
+  async save(config: AIDeviceConfig): Promise<AIDeviceConfig> {
+    const validated = parseConfig(JSON.stringify(config));
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const temporary = `${this.filePath}.${randomUUID()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(validated, null, 2)}\n`, {
+      encoding: 'utf8', flag: 'wx', mode: 0o600,
+    });
+    await rename(temporary, this.filePath);
+    return validated;
+  }
+}

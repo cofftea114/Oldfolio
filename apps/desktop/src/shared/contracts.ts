@@ -96,6 +96,71 @@ export interface TranscriptPlaybackSummary {
   segments: TranscriptPlaybackSegment[];
 }
 
+export type AISummaryTemplate =
+  | 'course'
+  | 'interview'
+  | 'podcast'
+  | 'tutorial'
+  | 'meeting'
+  | 'news-commentary'
+  | 'debate'
+  | 'review';
+
+export interface AISettingsSummary {
+  providerId: 'ollama';
+  endpoint: string;
+  model: string;
+  configured: boolean;
+}
+
+export interface AIModelSummary {
+  id: string;
+  displayName: string;
+}
+
+export interface AISummaryPreparation {
+  sourcePath: string;
+  sourceRevision: string;
+  suggestedTemplate: AISummaryTemplate;
+  templateConfidence: number;
+  availableTemplates: AISummaryTemplate[];
+  segmentCount: number;
+  sourceCharacters: number;
+  estimatedInputTokens: number;
+  endpoint: string;
+  model: string;
+  dataDestination: 'local_ollama';
+  estimatedCost: 0;
+  sourcePreview: string;
+}
+
+export interface AIChangeCitationSummary {
+  id: string;
+  resource: string;
+  excerpt?: string;
+  startMs?: number;
+  endMs?: number;
+}
+
+export interface AIPendingSummaryChange {
+  id: string;
+  riskLevel: 'L1' | 'L2';
+  targetPath: string;
+  sourcePath: string;
+  template: AISummaryTemplate;
+  content: string;
+  diff: string;
+  citations: AIChangeCitationSummary[];
+  model: string;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export interface AIAppliedChange {
+  historyId: string;
+  targetPath: string;
+  document: VaultDocument;
+}
+
 export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
@@ -119,4 +184,15 @@ export interface OldfolioDesktopApi {
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
+  getAISettings(): Promise<AISettingsSummary>;
+  probeOllama(endpoint: string): Promise<AIModelSummary[]>;
+  saveAISettings(input: { endpoint: string; model: string }): Promise<AISettingsSummary>;
+  prepareAISummary(path: string): Promise<AISummaryPreparation>;
+  generateAISummary(input: {
+    path: string;
+    sourceRevision: string;
+    template: AISummaryTemplate;
+  }): Promise<AIPendingSummaryChange>;
+  applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
+  undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;
 }

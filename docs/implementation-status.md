@@ -37,6 +37,10 @@ claim that the planned 9–12 month v1 is complete.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
+- Configure a loopback-only Ollama endpoint and model in device-local settings. For generated
+  Transcript notes, automatically select a summary template, disclose the exact untrusted-data
+  payload and estimated input size, require timestamp evidence for every generated claim, preview
+  the complete OKF `Synthesis` content and diff, and apply or undo the resulting L1/L2 change set.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.
 
@@ -45,8 +49,9 @@ claim that the planned 9–12 month v1 is complete.
 - WebDAV E2EE object encryption, manifest hash chains, recovery material, and exclusive sync-mode
   state are implemented as tested primitives. A production WebDAV transport, pairing UI, epoch-key
   rotation workflow, and external cryptographic review are still required.
-- The AI provider layer, template selector, and source connector registry are implemented, but the
-  desktop settings/keychain UI and end-user change-set review UI are not yet connected.
+- The OpenAI-compatible provider and secret-resolver boundary are implemented, but its desktop
+  settings UI remains disabled until native OS credential stores are connected. The current
+  end-user summary workflow intentionally supports only a loopback Ollama endpoint.
 - The mobile application is a web/Capacitor shell; native projects, keychain bindings, WebDAV sync,
   background upload behavior, and store packaging remain future work.
 
@@ -63,7 +68,9 @@ claim that the planned 9–12 month v1 is complete.
 - Production WebDAV transport and folder-sync conflict UI.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
+- Hierarchical summarization for transcripts above the current 200,000-character safety limit,
+  summary translation, AI chat, and reusable concept extraction across multiple transcripts.
 
-The next product increment should connect local/BYOK AI settings and reviewable summary change sets,
-then design a signed SHA-256 model manifest and download/resume flow without weakening the current
-explicit license-acceptance boundary.
+The next product increment should add hierarchical long-transcript summarization and reusable
+Concept extraction, then connect OS credential stores for OpenAI-compatible BYOK without weakening
+the current payload-disclosure and no-secret-in-Vault boundaries.

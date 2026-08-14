@@ -9,6 +9,9 @@ import {
   probeMediaTools,
 } from '@oldfolio/media';
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
+import { SUMMARY_TEMPLATES } from '@oldfolio/ai';
+import { AIDeviceConfigStore } from './ai-device-config.js';
+import { AISummaryService } from './ai-summary.js';
 import { importCaptionFile } from './caption-import.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
@@ -24,7 +27,10 @@ let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
 let mediaJobs: MediaJobStore | null = null;
 let mediaDeviceConfig: MediaDeviceConfigStore | null = null;
+let aiDeviceConfig: AIDeviceConfigStore | null = null;
+let aiSummary: AISummaryService | null = null;
 const activeMediaTasks = new Set<AbortController>();
+const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
@@ -52,6 +58,16 @@ function requireMediaJobs(): MediaJobStore {
 function requireMediaDeviceConfig(): MediaDeviceConfigStore {
   if (!mediaDeviceConfig) throw new Error('媒体设备配置尚未初始化');
   return mediaDeviceConfig;
+}
+
+function requireAIDeviceConfig(): AIDeviceConfigStore {
+  if (!aiDeviceConfig) throw new Error('AI 设备配置尚未初始化');
+  return aiDeviceConfig;
+}
+
+function requireAISummary(): AISummaryService {
+  if (!aiSummary) throw new Error('请先打开一个 Vault');
+  return aiSummary;
 }
 
 async function mediaSettingsSummary() {
@@ -101,6 +117,7 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
   mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
+  aiSummary = new AISummaryService(repository, requireAIDeviceConfig());
   await mediaJobs.initialize();
   await repository.rebuildIndex();
   const documents = await repository.scanDocuments();
@@ -373,6 +390,63 @@ function registerIpc(): void {
       return null;
     }
   });
+  ipcMain.handle('ai:get-settings', async (event) => {
+    assertTrustedSender(event);
+    return requireAISummary().settings();
+  });
+  ipcMain.handle('ai:probe-ollama', async (event, endpoint: unknown) => {
+    assertTrustedSender(event);
+    if (typeof endpoint !== 'string') throw new TypeError('Invalid Ollama endpoint');
+    return requireAISummary().probe(endpoint);
+  });
+  ipcMain.handle('ai:save-settings', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid AI settings');
+    const value = input as Record<string, unknown>;
+    if (typeof value.endpoint !== 'string' || typeof value.model !== 'string') throw new TypeError('Invalid AI settings');
+    return requireAISummary().configure(value.endpoint, value.model);
+  });
+  ipcMain.handle('ai:prepare-summary', async (event, path: unknown) => {
+    assertTrustedSender(event);
+    if (typeof path !== 'string') throw new TypeError('Invalid transcript path');
+    return requireAISummary().prepare(path);
+  });
+  ipcMain.handle('ai:generate-summary', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid AI summary request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.path !== 'string' ||
+      typeof value.sourceRevision !== 'string' ||
+      typeof value.template !== 'string' ||
+      !(SUMMARY_TEMPLATES as readonly string[]).includes(value.template)
+    ) {
+      throw new TypeError('Invalid AI summary request');
+    }
+    const controller = new AbortController();
+    activeAITasks.add(controller);
+    try {
+      return await requireAISummary().generate(
+        value.path,
+        value.sourceRevision,
+        value.template as (typeof SUMMARY_TEMPLATES)[number],
+        controller.signal,
+      );
+    } finally {
+      activeAITasks.delete(controller);
+    }
+  });
+  ipcMain.handle('ai:apply-changeset', async (event, changeSetId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof changeSetId !== 'string') throw new TypeError('Invalid AI change-set id');
+    const applied = await requireAISummary().apply(changeSetId);
+    return { ...applied, document: await readDocument(applied.targetPath) };
+  });
+  ipcMain.handle('ai:undo-changeset', async (event, historyId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof historyId !== 'string') throw new TypeError('Invalid AI history id');
+    return requireAISummary().undo(historyId);
+  });
 }
 
 function createWindow(): void {
@@ -399,7 +473,7 @@ function createWindow(): void {
     mainWindow.webContents.once('did-finish-load', () => {
       void mainWindow?.webContents.executeJavaScript(`(() => {
         const api = window.oldfolio;
-        const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel'];
+        const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'getAISettings', 'prepareAISummary', 'applyAIChangeSet'];
         return Boolean(api) && required.every((name) => typeof api[name] === 'function');
       })()`).then((bridgeReady) => {
         if (!bridgeReady) {
@@ -429,6 +503,7 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   mediaDeviceConfig = new MediaDeviceConfigStore(join(app.getPath('userData'), 'device', 'media.json'));
+  aiDeviceConfig = new AIDeviceConfigStore(join(app.getPath('userData'), 'device', 'ai.json'));
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
@@ -446,6 +521,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   for (const controller of activeMediaTasks) controller.abort(new Error('Oldfolio is closing.'));
+  for (const controller of activeAITasks) controller.abort(new Error('Oldfolio is closing.'));
   repository?.close();
 });
 

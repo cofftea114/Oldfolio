@@ -83,6 +83,7 @@ button { color: inherit; }
 .field-label { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; }
 .media-settings .transcribe-button { width: 100%; margin-top: 10px; background: var(--accent); color: white; }
 .media-settings button:disabled { opacity: .45; cursor: not-allowed; }
+.ai-settings > button { width: 100%; margin-top: 8px; }
 .job-row { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 6px; margin-top: 8px; font-size: 9px; }
 .job-row progress { width: 100%; accent-color: var(--accent); }
 .job-row small { grid-column: 1 / -1; color: #a3483f; }
@@ -133,6 +134,23 @@ button { color: inherit; }
 .ai-panel { background: #e8ede9; margin: -2px -4px 0; padding: 14px !important; border: 1px solid #d5dfd8 !important; border-radius: 10px; }
 .ai-panel p { color: #57675e; font-size: 11px; line-height: 1.6; }
 .ai-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.ai-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.ai-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.ai-review { display: flex; flex-direction: column; gap: 9px; }
+.ai-review dl { margin: 0; padding: 7px; border: 1px solid #ccd7d0; border-radius: 7px; background: rgba(255,255,255,.45); font-size: 9px; }
+.ai-review dl div { display: grid; grid-template-columns: 58px 1fr; gap: 5px; padding: 3px; }
+.ai-review dt { color: var(--muted); }
+.ai-review dd { margin: 0; overflow-wrap: anywhere; }
+.ai-review select { width: 100%; margin-top: 5px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); font-size: 10px; }
+.ai-review details { font-size: 9px; color: var(--accent); }
+.ai-review summary { cursor: pointer; font-weight: 650; }
+.ai-review pre { max-height: 220px; margin: 7px 0 0; padding: 8px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #f8f7f2; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 8px/1.45 ui-monospace, monospace; }
+.ai-risk { padding: 6px 8px; border-radius: 6px; background: #dce6df; color: #435a4d; font-size: 9px; }
+.ai-risk span { margin-right: 5px; font-weight: 800; }
+.ai-applied { color: var(--accent); }
+.ai-applied > svg { float: left; margin: 2px 6px 0 0; }
+.ai-applied p { margin-top: 0; overflow-wrap: anywhere; }
+.ai-error { color: #a3483f !important; }
 
 @media (max-width: 1120px) {
   .app-shell { grid-template-columns: 52px 238px minmax(440px, 1fr); }

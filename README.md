@@ -9,7 +9,8 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Capacitor-compatible mobile web shell.
 - Lossless native Markdown vault and strict OKF v0.2 bundle validation.
 - Rebuildable local search and link graph.
-- Reviewable, revision-bound AI change sets.
+- Local Ollama transcript summaries with automatic template selection, timestamp evidence,
+  reviewable revision-bound change sets, approval, and atomic undo.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
 - Provider contracts for local/BYOK AI.
 - Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
@@ -60,3 +61,19 @@ SubRip/SRT, mov_text, and WebVTT are converted to WebVTT and used directly with 
 timestamps. The preferred language wins, followed by the default text track. Bitmap tracks such as
 PGS, VobSub/DVD, and DVB subtitles are recorded as detected but currently fall back to Whisper;
 burned-in subtitles require a future OCR pipeline.
+
+## Local AI summary setup
+
+1. Install and start Ollama on the same computer, then download a chat model with Ollama.
+2. Open a Vault, select **AI workspace**, and keep the default
+   `http://127.0.0.1:11434/api/` endpoint unless Ollama uses another loopback port.
+3. Select **Detect local models**, choose a model, and save the device configuration.
+4. Open an Oldfolio-generated Transcript and select **Prepare summary**. Review the exact JSON
+   payload, local destination, model, automatic template, estimated input size, and zero remote
+   service cost before sending it.
+5. Review the generated OKF `Synthesis` document and diff. Nothing is written until **Approve and
+   write to Vault** is selected; the resulting write can be atomically undone while unchanged.
+
+This first UI intentionally accepts only loopback Ollama endpoints and stores only the endpoint and
+model name in device-local application data. OpenAI-compatible BYOK UI remains disabled until an OS
+credential-store implementation can guarantee that keys never enter the Vault or ordinary config.

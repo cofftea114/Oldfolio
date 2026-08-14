@@ -19,6 +19,13 @@ const api: OldfolioDesktopApi = {
   retryMediaJob: (jobId) => ipcRenderer.invoke('media:retry-job', jobId),
   listMediaJobs: () => ipcRenderer.invoke('media:list-jobs'),
   getTranscriptPlayback: (path) => ipcRenderer.invoke('media:get-playback', path),
+  getAISettings: () => ipcRenderer.invoke('ai:get-settings'),
+  probeOllama: (endpoint) => ipcRenderer.invoke('ai:probe-ollama', endpoint),
+  saveAISettings: (input) => ipcRenderer.invoke('ai:save-settings', input),
+  prepareAISummary: (path) => ipcRenderer.invoke('ai:prepare-summary', path),
+  generateAISummary: (input) => ipcRenderer.invoke('ai:generate-summary', input),
+  applyAIChangeSet: (changeSetId) => ipcRenderer.invoke('ai:apply-changeset', changeSetId),
+  undoAIChangeSet: (historyId) => ipcRenderer.invoke('ai:undo-changeset', historyId),
 };
 
 contextBridge.exposeInMainWorld('oldfolio', api);

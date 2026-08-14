@@ -1,6 +1,7 @@
 import {
   BookOpenText,
   Bot,
+  CheckCircle2,
   ChevronRight,
   CircleDot,
   FilePlus2,
@@ -9,6 +10,7 @@ import {
   PanelRightClose,
   Captions,
   Radio,
+  RotateCcw,
   Search,
   Settings2,
   Sparkles,
@@ -16,6 +18,12 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
+  AIAppliedChange,
+  AIModelSummary,
+  AIPendingSummaryChange,
+  AISettingsSummary,
+  AISummaryPreparation,
+  AISummaryTemplate,
   DocumentSummary,
   MediaJobSummary,
   MediaSettingsSummary,
@@ -28,6 +36,17 @@ import { MarkdownEditor } from './MarkdownEditor';
 import { TranscriptPlayer } from './TranscriptPlayer';
 
 const EMPTY_MESSAGE = '# 欢迎来到 Oldfolio\n\n选择或创建一个本地 Vault 开始记录。';
+
+const SUMMARY_TEMPLATE_LABELS: Readonly<Record<AISummaryTemplate, string>> = {
+  course: '课程',
+  interview: '访谈',
+  podcast: '播客',
+  tutorial: '教程',
+  meeting: '会议',
+  'news-commentary': '新闻评论',
+  debate: '辩论',
+  review: '评测',
+};
 
 export function App() {
   const [vault, setVault] = useState<VaultSummary | null>(null);
@@ -54,6 +73,17 @@ export function App() {
   const [selectedModel, setSelectedModel] = useState('');
   const [mediaLanguage, setMediaLanguage] = useState('auto');
   const [playback, setPlayback] = useState<TranscriptPlaybackSummary | null>(null);
+  const [aiSettingsOpen, setAISettingsOpen] = useState(false);
+  const [aiSettings, setAISettings] = useState<AISettingsSummary | null>(null);
+  const [aiEndpoint, setAIEndpoint] = useState('http://127.0.0.1:11434/api/');
+  const [aiModels, setAIModels] = useState<AIModelSummary[]>([]);
+  const [aiModel, setAIModel] = useState('');
+  const [aiBusy, setAIBusy] = useState(false);
+  const [aiError, setAIError] = useState('');
+  const [summaryPreparation, setSummaryPreparation] = useState<AISummaryPreparation | null>(null);
+  const [summaryTemplate, setSummaryTemplate] = useState<AISummaryTemplate>('course');
+  const [pendingSummary, setPendingSummary] = useState<AIPendingSummaryChange | null>(null);
+  const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -82,6 +112,137 @@ export function App() {
     setDraft(document.content);
     setBacklinks(nextBacklinks);
     setPlayback(nextPlayback);
+    setSummaryPreparation(null);
+    setPendingSummary(null);
+    setAppliedChange(null);
+    setAIError('');
+  };
+
+  const toggleAISettings = async () => {
+    const next = !aiSettingsOpen;
+    setAISettingsOpen(next);
+    if (!next || !vault) return;
+    setAIError('');
+    try {
+      const settings = await window.oldfolio.getAISettings();
+      setAISettings(settings);
+      setAIEndpoint(settings.endpoint);
+      setAIModel(settings.model);
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法读取 AI 配置');
+    }
+  };
+
+  const probeOllama = async () => {
+    setAIBusy(true);
+    setAIError('');
+    setStatus('正在连接本机 Ollama…');
+    try {
+      const models = await window.oldfolio.probeOllama(aiEndpoint);
+      setAIModels(models);
+      setAIModel((current) => models.some((model) => model.id === current) ? current : models[0]?.id ?? '');
+      setStatus(models.length ? `已发现 ${models.length} 个本地模型` : 'Ollama 可连接，但没有已安装模型');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法连接 Ollama');
+      setStatus('Ollama 连接失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const saveAISettings = async () => {
+    if (!aiModel) return;
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const settings = await window.oldfolio.saveAISettings({ endpoint: aiEndpoint, model: aiModel });
+      setAISettings(settings);
+      setAIEndpoint(settings.endpoint);
+      setStatus('本地 AI 配置已保存到当前设备');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法保存 AI 配置');
+      setStatus('AI 配置保存失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const prepareAISummary = async () => {
+    if (!active || !playback || draft !== active.content) return;
+    setAIBusy(true);
+    setAIError('');
+    setPendingSummary(null);
+    setAppliedChange(null);
+    setStatus('正在准备摘要数据披露…');
+    try {
+      const preparation = await window.oldfolio.prepareAISummary(active.path);
+      setSummaryPreparation(preparation);
+      setSummaryTemplate(preparation.suggestedTemplate);
+      setStatus('请确认发送内容和摘要模板');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法准备 AI 摘要');
+      setStatus('摘要准备失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const generateAISummary = async () => {
+    if (!summaryPreparation) return;
+    setAIBusy(true);
+    setAIError('');
+    setStatus('正在由本机 Ollama 生成摘要…');
+    try {
+      const pending = await window.oldfolio.generateAISummary({
+        path: summaryPreparation.sourcePath,
+        sourceRevision: summaryPreparation.sourceRevision,
+        template: summaryTemplate,
+      });
+      setPendingSummary(pending);
+      setStatus('AI 摘要变更集已生成，等待批准');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : 'AI 摘要生成失败');
+      setStatus('AI 摘要生成失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const applyAIChangeSet = async () => {
+    if (!pendingSummary) return;
+    setAIBusy(true);
+    setAIError('');
+    setStatus('正在原子应用 AI 变更集…');
+    try {
+      const applied = await window.oldfolio.applyAIChangeSet(pendingSummary.id);
+      await loadDocuments();
+      await openDocument(applied.document.path);
+      setAppliedChange(applied);
+      setStatus('AI 摘要已写入，可立即撤销');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法应用 AI 变更集');
+      setStatus('AI 变更集未写入');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const undoAIChangeSet = async () => {
+    if (!appliedChange) return;
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const undone = await window.oldfolio.undoAIChangeSet(appliedChange.historyId);
+      await loadDocuments();
+      if (undone.sourcePath) await openDocument(undone.sourcePath);
+      setAppliedChange(null);
+      setStatus('AI 变更集已撤销');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法撤销 AI 变更集');
+      setStatus('撤销失败：目标文件可能已经变化');
+    } finally {
+      setAIBusy(false);
+    }
   };
 
   const importFeed = async (event: FormEvent<HTMLFormElement>) => {
@@ -277,7 +438,11 @@ export function App() {
       <aside className="rail" aria-label="主导航">
         <button className="rail-button active" title="笔记"><BookOpenText /></button>
         <button className="rail-button" title="知识图谱"><Network /></button>
-        <button className="rail-button" title="AI 工作台"><Sparkles /></button>
+        <button
+          className={aiSettingsOpen ? 'rail-button active' : 'rail-button'}
+          title="AI 工作台"
+          onClick={() => void toggleAISettings()}
+        ><Sparkles /></button>
         <button
           className={importOpen ? 'rail-button active' : 'rail-button'}
           title="导入 RSS / Podcast"
@@ -368,6 +533,36 @@ export function App() {
             {importError && <p className="media-error" role="alert">{importError}</p>}
           </section>
         )}
+        {aiSettingsOpen && (
+          <section className="media-settings ai-settings">
+            <div className="section-label"><Sparkles size={14} /> 本地 AI</div>
+            <p className="model-help">首版仅连接本机 Ollama。摘要数据发送到下方本机地址，不会经过 Oldfolio 服务。</p>
+            {aiSettings?.configured && <small className="model-help-note">当前设备：{aiSettings.model}</small>}
+            <label className="field-label">服务地址
+              <input
+                disabled={aiBusy || !vault}
+                value={aiEndpoint}
+                onChange={(event) => setAIEndpoint(event.target.value)}
+                placeholder="http://127.0.0.1:11434/api/"
+              />
+            </label>
+            <button disabled={aiBusy || !vault || !aiEndpoint.trim()} onClick={() => void probeOllama()}>
+              {aiBusy ? '检测中…' : '检测本机模型'}
+            </button>
+            <label className="field-label">摘要模型
+              <select disabled={aiBusy || aiModels.length === 0} value={aiModel} onChange={(event) => setAIModel(event.target.value)}>
+                {!aiModel && <option value="">尚未检测模型</option>}
+                {aiModel && !aiModels.some((model) => model.id === aiModel) && <option value={aiModel}>{aiModel}（已保存）</option>}
+                {aiModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
+              </select>
+            </label>
+            <button className="transcribe-button" disabled={aiBusy || !aiModel} onClick={() => void saveAISettings()}>
+              保存当前设备配置
+            </button>
+            <small className="model-help-note">这里只保存 endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
+            {aiError && <p className="media-error" role="alert">{aiError}</p>}
+          </section>
+        )}
         <div className="file-section">
           <div className="section-label">笔记 <span>{documents.length}</span></div>
           <nav className="file-list">
@@ -420,8 +615,66 @@ export function App() {
           </section>
           <section className="ai-panel">
             <div className="section-label"><Sparkles size={14} /> AI 变更集</div>
-            <p>AI 建议将以可审阅 diff 出现，不会静默覆盖你的笔记。</p>
-            <button disabled={!active}>分析当前笔记</button>
+            {!summaryPreparation && !pendingSummary && !appliedChange && (
+              <>
+                <p>从带时间戳的 Transcript 生成引用可追溯的摘要。AI 只创建待审阅变更集，不会静默覆盖笔记。</p>
+                <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
+                  {aiBusy ? '准备中…' : '准备摘要'}
+                </button>
+                {active && !playback && <small className="ai-hint">请选择由 Oldfolio 生成的 Transcript 笔记。</small>}
+                {active && draft !== active.content && <small className="ai-hint">等待当前修改保存后再分析。</small>}
+              </>
+            )}
+            {summaryPreparation && !pendingSummary && (
+              <div className="ai-review">
+                <dl>
+                  <div><dt>目标</dt><dd>本机 Ollama</dd></div>
+                  <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
+                  <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
+                  <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
+                  <div><dt>预计费用</dt><dd>¥0（本地）</dd></div>
+                </dl>
+                <label className="field-label">摘要模板
+                  <select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value as AISummaryTemplate)}>
+                    {summaryPreparation.availableTemplates.map((template) => (
+                      <option key={template} value={template}>{SUMMARY_TEMPLATE_LABELS[template]}</option>
+                    ))}
+                  </select>
+                </label>
+                <details>
+                  <summary>查看将发送给模型的完整内容</summary>
+                  <pre>{summaryPreparation.sourcePreview}</pre>
+                </details>
+                <button disabled={aiBusy} onClick={() => void generateAISummary()}>
+                  {aiBusy ? '生成中…' : '确认并发送到本机模型'}
+                </button>
+              </div>
+            )}
+            {pendingSummary && (
+              <div className="ai-review">
+                <div className="ai-risk"><span>{pendingSummary.riskLevel}</span> {pendingSummary.riskLevel === 'L1' ? '新建 AI 文件' : '更新 AI Wiki'}</div>
+                <p><strong>{pendingSummary.targetPath}</strong><br />{pendingSummary.citations.length} 条时间戳证据 · {pendingSummary.model}</p>
+                <details>
+                  <summary>审阅生成内容</summary>
+                  <pre>{pendingSummary.content}</pre>
+                </details>
+                <details>
+                  <summary>审阅逐行 diff</summary>
+                  <pre>{pendingSummary.diff}</pre>
+                </details>
+                <button disabled={aiBusy} onClick={() => void applyAIChangeSet()}>
+                  {aiBusy ? '应用中…' : '批准并写入 Vault'}
+                </button>
+              </div>
+            )}
+            {appliedChange && (
+              <div className="ai-applied">
+                <CheckCircle2 size={16} />
+                <p>摘要已写入 <strong>{appliedChange.targetPath}</strong></p>
+                <button disabled={aiBusy} onClick={() => void undoAIChangeSet()}><RotateCcw size={13} /> 撤销本次写入</button>
+              </div>
+            )}
+            {aiError && <p className="ai-error" role="alert">{aiError}</p>}
           </section>
         </aside>
       )}
