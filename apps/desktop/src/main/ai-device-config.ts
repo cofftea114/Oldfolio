@@ -4,9 +4,11 @@ import { dirname } from 'node:path';
 
 import { validateAIEndpoint } from '@oldfolio/ai';
 
+export type LocalAIProviderId = 'ollama' | 'openai-compatible';
+
 export interface AIDeviceConfig {
   readonly version: 1;
-  readonly providerId: 'ollama';
+  readonly providerId: LocalAIProviderId;
   readonly endpoint: string;
   readonly model: string;
 }
@@ -23,32 +25,39 @@ function isLoopback(hostname: string): boolean {
   return normalized === 'localhost' || normalized === '::1' || normalized.startsWith('127.');
 }
 
-export function normalizeLocalOllamaEndpoint(value: string): string {
-  if (!value.trim() || value.length > 2_048 || value.includes('\0')) throw new Error('Ollama 地址无效。');
+export function normalizeLocalAIEndpoint(providerId: LocalAIProviderId, value: string): string {
+  if (!value.trim() || value.length > 2_048 || value.includes('\0')) throw new Error('本地 AI 地址无效。');
   let candidate: URL;
   try {
     candidate = new URL(value.trim());
   } catch {
-    throw new Error('Ollama 地址无效。');
+    throw new Error('本地 AI 地址无效。');
   }
-  if (!isLoopback(candidate.hostname)) throw new Error('当前版本只允许连接本机 Ollama。');
+  if (!isLoopback(candidate.hostname)) throw new Error('当前版本只允许连接本机 AI 服务。');
   const url = validateAIEndpoint(value.trim(), { allowLocalhostHttp: true });
-  if (url.search) throw new Error('Ollama 地址不能包含查询参数。');
-  if (url.pathname === '/') url.pathname = '/api/';
+  if (url.search) throw new Error('本地 AI 地址不能包含查询参数。');
+  if (url.pathname === '/') url.pathname = providerId === 'ollama' ? '/api/' : '/v1/';
   if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
   return url.href;
 }
 
+export function normalizeLocalOllamaEndpoint(value: string): string {
+  return normalizeLocalAIEndpoint('ollama', value);
+}
+
 function parseConfig(source: string): AIDeviceConfig {
   const value = JSON.parse(source) as Partial<AIDeviceConfig>;
-  if (value.version !== 1 || value.providerId !== 'ollama') throw new Error('AI 设备配置无效。');
+  if (
+    value.version !== 1 ||
+    (value.providerId !== 'ollama' && value.providerId !== 'openai-compatible')
+  ) throw new Error('AI 设备配置无效。');
   if (typeof value.endpoint !== 'string' || typeof value.model !== 'string' || value.model.length > 256 || value.model.includes('\0')) {
     throw new Error('AI 设备配置无效。');
   }
   return {
     version: 1,
-    providerId: 'ollama',
-    endpoint: normalizeLocalOllamaEndpoint(value.endpoint),
+    providerId: value.providerId,
+    endpoint: normalizeLocalAIEndpoint(value.providerId, value.endpoint),
     model: value.model.trim(),
   };
 }

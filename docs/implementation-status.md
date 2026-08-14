@@ -37,7 +37,8 @@ claim that the planned 9–12 month v1 is complete.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
-- Configure a loopback-only Ollama endpoint and model in device-local settings. For generated
+- Configure a loopback-only Ollama or LM Studio OpenAI-compatible endpoint and model in device-local
+  settings. Root URLs are normalized to `/api/` or `/v1/` according to the selected provider. For generated
   Transcript notes, automatically select a summary template, disclose the exact untrusted-data
   payload and estimated input size, require timestamp evidence for every generated claim, preview
   the complete OKF `Synthesis` content and diff, and apply or undo the resulting L1/L2 change set.
@@ -50,8 +51,8 @@ claim that the planned 9–12 month v1 is complete.
   state are implemented as tested primitives. A production WebDAV transport, pairing UI, epoch-key
   rotation workflow, and external cryptographic review are still required.
 - The OpenAI-compatible provider and secret-resolver boundary are implemented, but its desktop
-  settings UI remains disabled until native OS credential stores are connected. The current
-  end-user summary workflow intentionally supports only a loopback Ollama endpoint.
+  remote/BYOK settings UI remains disabled until native OS credential stores are connected. The
+  current end-user summary workflow supports loopback Ollama and LM Studio without API keys.
 - The mobile application is a web/Capacitor shell; native projects, keychain bindings, WebDAV sync,
   background upload behavior, and store packaging remain future work.
 

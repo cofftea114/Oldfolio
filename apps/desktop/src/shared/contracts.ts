@@ -106,8 +106,10 @@ export type AISummaryTemplate =
   | 'debate'
   | 'review';
 
+export type AILocalProviderId = 'ollama' | 'openai-compatible';
+
 export interface AISettingsSummary {
-  providerId: 'ollama';
+  providerId: AILocalProviderId;
   endpoint: string;
   model: string;
   configured: boolean;
@@ -129,7 +131,8 @@ export interface AISummaryPreparation {
   estimatedInputTokens: number;
   endpoint: string;
   model: string;
-  dataDestination: 'local_ollama';
+  providerId: AILocalProviderId;
+  dataDestination: 'local_ollama' | 'local_lm_studio';
   estimatedCost: 0;
   sourcePreview: string;
 }
@@ -185,8 +188,12 @@ export interface OldfolioDesktopApi {
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
   getAISettings(): Promise<AISettingsSummary>;
-  probeOllama(endpoint: string): Promise<AIModelSummary[]>;
-  saveAISettings(input: { endpoint: string; model: string }): Promise<AISettingsSummary>;
+  probeLocalAI(input: { providerId: AILocalProviderId; endpoint: string }): Promise<AIModelSummary[]>;
+  saveAISettings(input: {
+    providerId: AILocalProviderId;
+    endpoint: string;
+    model: string;
+  }): Promise<AISettingsSummary>;
   prepareAISummary(path: string): Promise<AISummaryPreparation>;
   generateAISummary(input: {
     path: string;

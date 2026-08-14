@@ -3,6 +3,7 @@ import { parse } from 'node:path';
 
 import {
   OllamaProvider,
+  OpenAICompatibleProvider,
   SUMMARY_TEMPLATES,
   createWikiChangeSet,
   generateTranscriptSummary,
@@ -27,8 +28,8 @@ import {
   type VaultRepository,
 } from '@oldfolio/vault';
 
-import { normalizeLocalOllamaEndpoint } from './ai-device-config.js';
-import type { AIDeviceConfigStore } from './ai-device-config.js';
+import { normalizeLocalAIEndpoint } from './ai-device-config.js';
+import type { AIDeviceConfigStore, LocalAIProviderId } from './ai-device-config.js';
 
 export interface AISummaryPreparation {
   readonly sourcePath: string;
@@ -41,7 +42,8 @@ export interface AISummaryPreparation {
   readonly estimatedInputTokens: number;
   readonly endpoint: string;
   readonly model: string;
-  readonly dataDestination: 'local_ollama';
+  readonly providerId: LocalAIProviderId;
+  readonly dataDestination: 'local_ollama' | 'local_lm_studio';
   readonly estimatedCost: 0;
   readonly sourcePreview: string;
 }
@@ -63,6 +65,14 @@ interface PendingRecord {
   readonly changeSet: WikiChangeSet;
   readonly targetPath: string;
   readonly sourcePath: string;
+}
+
+export type LocalAIProviderResolver = (providerId: LocalAIProviderId) => AIProvider;
+
+function defaultProvider(providerId: LocalAIProviderId): AIProvider {
+  return providerId === 'ollama'
+    ? new OllamaProvider()
+    : new OpenAICompatibleProvider({ endpointPolicy: { allowLocalhostHttp: true } });
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -134,33 +144,40 @@ export class AISummaryService {
   constructor(
     private readonly repository: VaultRepository,
     private readonly configStore: AIDeviceConfigStore,
-    private readonly provider: AIProvider = new OllamaProvider(),
+    private readonly providerOrResolver: AIProvider | LocalAIProviderResolver = defaultProvider,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async settings(): Promise<{ readonly providerId: 'ollama'; readonly endpoint: string; readonly model: string; readonly configured: boolean }> {
+  async settings(): Promise<{ readonly providerId: LocalAIProviderId; readonly endpoint: string; readonly model: string; readonly configured: boolean }> {
     const config = await this.configStore.load();
     return { ...config, configured: Boolean(config.model) };
   }
 
-  async probe(endpoint: string): Promise<readonly { readonly id: string; readonly displayName: string }[]> {
-    const normalized = normalizeLocalOllamaEndpoint(endpoint);
-    const models = await this.provider.listModels({ providerId: 'ollama', endpoint: normalized, model: '' });
+  async probe(
+    providerId: LocalAIProviderId,
+    endpoint: string,
+  ): Promise<readonly { readonly id: string; readonly displayName: string }[]> {
+    const normalized = normalizeLocalAIEndpoint(providerId, endpoint);
+    const models = await this.provider(providerId).listModels({ providerId, endpoint: normalized, model: '' });
     return models.map((model) => ({ id: model.id, displayName: model.displayName }));
   }
 
-  async configure(endpoint: string, model: string): Promise<ReturnType<AISummaryService['settings']> extends Promise<infer T> ? T : never> {
-    const normalized = normalizeLocalOllamaEndpoint(endpoint);
-    if (!model.trim()) throw new Error('请选择一个 Ollama 模型。');
-    const models = await this.provider.listModels({ providerId: 'ollama', endpoint: normalized, model: '' });
-    if (!models.some((candidate) => candidate.id === model.trim())) throw new Error('所选模型不在 Ollama 返回的模型列表中。');
-    await this.configStore.save({ version: 1, providerId: 'ollama', endpoint: normalized, model: model.trim() });
+  async configure(
+    providerId: LocalAIProviderId,
+    endpoint: string,
+    model: string,
+  ): Promise<ReturnType<AISummaryService['settings']> extends Promise<infer T> ? T : never> {
+    const normalized = normalizeLocalAIEndpoint(providerId, endpoint);
+    if (!model.trim()) throw new Error('请选择一个本地聊天模型。');
+    const models = await this.provider(providerId).listModels({ providerId, endpoint: normalized, model: '' });
+    if (!models.some((candidate) => candidate.id === model.trim())) throw new Error('所选模型不在本地服务返回的模型列表中。');
+    await this.configStore.save({ version: 1, providerId, endpoint: normalized, model: model.trim() });
     return this.settings();
   }
 
   async prepare(sourcePath: string): Promise<AISummaryPreparation> {
     const config = await this.configStore.load();
-    if (!config.model) throw new Error('请先连接 Ollama 并选择模型。');
+    if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
     const prepared = await this.readPrepared(sourcePath);
     return {
       sourcePath: prepared.sourcePath,
@@ -173,7 +190,8 @@ export class AISummaryService {
       estimatedInputTokens: prepared.estimatedInputTokens,
       endpoint: config.endpoint,
       model: config.model,
-      dataDestination: 'local_ollama',
+      providerId: config.providerId,
+      dataDestination: config.providerId === 'ollama' ? 'local_ollama' : 'local_lm_studio',
       estimatedCost: 0,
       sourcePreview: prepared.sourcePayload,
     };
@@ -187,10 +205,10 @@ export class AISummaryService {
   ): Promise<AIPendingSummaryChange> {
     if (!(SUMMARY_TEMPLATES as readonly string[]).includes(template)) throw new Error('摘要模板无效。');
     const config = await this.configStore.load();
-    if (!config.model) throw new Error('请先连接 Ollama 并选择模型。');
+    if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
     const prepared = await this.readPrepared(sourcePath);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
-    const generated = await generateTranscriptSummary(this.provider, config, prepared, template, {
+    const generated = await generateTranscriptSummary(this.provider(config.providerId), config, prepared, template, {
       resolveSecret: () => Promise.resolve(undefined),
       ...(signal ? { signal } : {}),
     });
@@ -327,6 +345,12 @@ export class AISummaryService {
       resource: manifest.resource,
       segments: manifest.segments,
     });
+  }
+
+  private provider(providerId: LocalAIProviderId): AIProvider {
+    return typeof this.providerOrResolver === 'function'
+      ? this.providerOrResolver(providerId)
+      : this.providerOrResolver;
   }
 
   private async readOptional(path: string): Promise<VaultFileSnapshot | null> {

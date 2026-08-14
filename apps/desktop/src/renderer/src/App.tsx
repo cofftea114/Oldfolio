@@ -19,6 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   AIAppliedChange,
+  AILocalProviderId,
   AIModelSummary,
   AIPendingSummaryChange,
   AISettingsSummary,
@@ -48,6 +49,16 @@ const SUMMARY_TEMPLATE_LABELS: Readonly<Record<AISummaryTemplate, string>> = {
   review: '评测',
 };
 
+const LOCAL_AI_PROVIDER_LABELS: Readonly<Record<AILocalProviderId, string>> = {
+  ollama: 'Ollama',
+  'openai-compatible': 'LM Studio',
+};
+
+const LOCAL_AI_DEFAULT_ENDPOINTS: Readonly<Record<AILocalProviderId, string>> = {
+  ollama: 'http://127.0.0.1:11434/api/',
+  'openai-compatible': 'http://127.0.0.1:1234/v1/',
+};
+
 export function App() {
   const [vault, setVault] = useState<VaultSummary | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -75,6 +86,7 @@ export function App() {
   const [playback, setPlayback] = useState<TranscriptPlaybackSummary | null>(null);
   const [aiSettingsOpen, setAISettingsOpen] = useState(false);
   const [aiSettings, setAISettings] = useState<AISettingsSummary | null>(null);
+  const [aiProvider, setAIProvider] = useState<AILocalProviderId>('ollama');
   const [aiEndpoint, setAIEndpoint] = useState('http://127.0.0.1:11434/api/');
   const [aiModels, setAIModels] = useState<AIModelSummary[]>([]);
   const [aiModel, setAIModel] = useState('');
@@ -126,6 +138,7 @@ export function App() {
     try {
       const settings = await window.oldfolio.getAISettings();
       setAISettings(settings);
+      setAIProvider(settings.providerId);
       setAIEndpoint(settings.endpoint);
       setAIModel(settings.model);
     } catch (error: unknown) {
@@ -133,18 +146,18 @@ export function App() {
     }
   };
 
-  const probeOllama = async () => {
+  const probeLocalAI = async () => {
     setAIBusy(true);
     setAIError('');
-    setStatus('正在连接本机 Ollama…');
+    setStatus(`正在连接本机 ${LOCAL_AI_PROVIDER_LABELS[aiProvider]}…`);
     try {
-      const models = await window.oldfolio.probeOllama(aiEndpoint);
+      const models = await window.oldfolio.probeLocalAI({ providerId: aiProvider, endpoint: aiEndpoint });
       setAIModels(models);
       setAIModel((current) => models.some((model) => model.id === current) ? current : models[0]?.id ?? '');
-      setStatus(models.length ? `已发现 ${models.length} 个本地模型` : 'Ollama 可连接，但没有已安装模型');
+      setStatus(models.length ? `已发现 ${models.length} 个本地模型` : `${LOCAL_AI_PROVIDER_LABELS[aiProvider]} 可连接，但没有可用模型`);
     } catch (error: unknown) {
-      setAIError(error instanceof Error ? error.message : '无法连接 Ollama');
-      setStatus('Ollama 连接失败');
+      setAIError(error instanceof Error ? error.message : `无法连接 ${LOCAL_AI_PROVIDER_LABELS[aiProvider]}`);
+      setStatus('本地 AI 连接失败');
     } finally {
       setAIBusy(false);
     }
@@ -155,7 +168,7 @@ export function App() {
     setAIBusy(true);
     setAIError('');
     try {
-      const settings = await window.oldfolio.saveAISettings({ endpoint: aiEndpoint, model: aiModel });
+      const settings = await window.oldfolio.saveAISettings({ providerId: aiProvider, endpoint: aiEndpoint, model: aiModel });
       setAISettings(settings);
       setAIEndpoint(settings.endpoint);
       setStatus('本地 AI 配置已保存到当前设备');
@@ -191,7 +204,7 @@ export function App() {
     if (!summaryPreparation) return;
     setAIBusy(true);
     setAIError('');
-    setStatus('正在由本机 Ollama 生成摘要…');
+    setStatus(`正在由本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]} 生成摘要…`);
     try {
       const pending = await window.oldfolio.generateAISummary({
         path: summaryPreparation.sourcePath,
@@ -536,17 +549,33 @@ export function App() {
         {aiSettingsOpen && (
           <section className="media-settings ai-settings">
             <div className="section-label"><Sparkles size={14} /> 本地 AI</div>
-            <p className="model-help">首版仅连接本机 Ollama。摘要数据发送到下方本机地址，不会经过 Oldfolio 服务。</p>
-            {aiSettings?.configured && <small className="model-help-note">当前设备：{aiSettings.model}</small>}
+            <p className="model-help">连接本机 Ollama 或 LM Studio。摘要数据只发送到下方回环地址，不会经过 Oldfolio 服务。</p>
+            {aiSettings?.configured && <small className="model-help-note">当前设备：{LOCAL_AI_PROVIDER_LABELS[aiSettings.providerId]} · {aiSettings.model}</small>}
+            <label className="field-label">服务类型
+              <select
+                disabled={aiBusy || !vault}
+                value={aiProvider}
+                onChange={(event) => {
+                  const providerId = event.target.value as AILocalProviderId;
+                  setAIProvider(providerId);
+                  setAIEndpoint(LOCAL_AI_DEFAULT_ENDPOINTS[providerId]);
+                  setAIModels([]);
+                  setAIModel('');
+                }}
+              >
+                <option value="ollama">Ollama</option>
+                <option value="openai-compatible">LM Studio（OpenAI-compatible）</option>
+              </select>
+            </label>
             <label className="field-label">服务地址
               <input
                 disabled={aiBusy || !vault}
                 value={aiEndpoint}
                 onChange={(event) => setAIEndpoint(event.target.value)}
-                placeholder="http://127.0.0.1:11434/api/"
+                placeholder={LOCAL_AI_DEFAULT_ENDPOINTS[aiProvider]}
               />
             </label>
-            <button disabled={aiBusy || !vault || !aiEndpoint.trim()} onClick={() => void probeOllama()}>
+            <button disabled={aiBusy || !vault || !aiEndpoint.trim()} onClick={() => void probeLocalAI()}>
               {aiBusy ? '检测中…' : '检测本机模型'}
             </button>
             <label className="field-label">摘要模型
@@ -559,7 +588,7 @@ export function App() {
             <button className="transcribe-button" disabled={aiBusy || !aiModel} onClick={() => void saveAISettings()}>
               保存当前设备配置
             </button>
-            <small className="model-help-note">这里只保存 endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
+            <small className="model-help-note">这里只保存服务类型、endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
             {aiError && <p className="media-error" role="alert">{aiError}</p>}
           </section>
         )}
@@ -628,7 +657,7 @@ export function App() {
             {summaryPreparation && !pendingSummary && (
               <div className="ai-review">
                 <dl>
-                  <div><dt>目标</dt><dd>本机 Ollama</dd></div>
+                  <div><dt>目标</dt><dd>本机 {LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]}</dd></div>
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>

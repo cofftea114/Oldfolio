@@ -394,17 +394,26 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return requireAISummary().settings();
   });
-  ipcMain.handle('ai:probe-ollama', async (event, endpoint: unknown) => {
+  ipcMain.handle('ai:probe-provider', async (event, input: unknown) => {
     assertTrustedSender(event);
-    if (typeof endpoint !== 'string') throw new TypeError('Invalid Ollama endpoint');
-    return requireAISummary().probe(endpoint);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid local AI probe');
+    const value = input as Record<string, unknown>;
+    if (
+      (value.providerId !== 'ollama' && value.providerId !== 'openai-compatible') ||
+      typeof value.endpoint !== 'string'
+    ) throw new TypeError('Invalid local AI probe');
+    return requireAISummary().probe(value.providerId, value.endpoint);
   });
   ipcMain.handle('ai:save-settings', async (event, input: unknown) => {
     assertTrustedSender(event);
     if (typeof input !== 'object' || input === null) throw new TypeError('Invalid AI settings');
     const value = input as Record<string, unknown>;
-    if (typeof value.endpoint !== 'string' || typeof value.model !== 'string') throw new TypeError('Invalid AI settings');
-    return requireAISummary().configure(value.endpoint, value.model);
+    if (
+      (value.providerId !== 'ollama' && value.providerId !== 'openai-compatible') ||
+      typeof value.endpoint !== 'string' ||
+      typeof value.model !== 'string'
+    ) throw new TypeError('Invalid AI settings');
+    return requireAISummary().configure(value.providerId, value.endpoint, value.model);
   });
   ipcMain.handle('ai:prepare-summary', async (event, path: unknown) => {
     assertTrustedSender(event);
