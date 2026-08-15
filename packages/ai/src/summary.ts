@@ -19,9 +19,11 @@ const MAX_DOCUMENT_WINDOW_CHARACTERS = 3_500;
 const MAX_SEGMENT_PART_CHARACTERS = 2_500;
 const MAX_WORKING_NOTES_CHARACTERS = 1_800;
 const MAX_FINAL_EVIDENCE_CHARACTERS = 4_800;
+const MAX_READER_EVIDENCE_IDS = 24;
+const MAX_SUMMARY_EVIDENCE_IDS = 3;
 const MAX_READER_OUTPUT_TOKENS = 1_024;
 const MAX_OUTPUT_TOKENS_PER_CALL = 1_536;
-const PROMPT_VERSION = 'transcript-summary-v4-evidence-allowlist';
+const PROMPT_VERSION = 'transcript-summary-v5-viewpoint-synthesis';
 
 export interface TranscriptSummarySegment {
   readonly startMs: number;
@@ -48,13 +50,13 @@ export interface SummaryEvidence {
 
 const citedTextSchema = z.object({
   text: z.string().trim().min(1).max(4_000),
-  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(8),
+  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(MAX_SUMMARY_EVIDENCE_IDS),
 }).strict();
 
 const conceptSchema = z.object({
   name: z.string().trim().min(1).max(120),
   explanation: z.string().trim().min(1).max(4_000),
-  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(8),
+  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(MAX_SUMMARY_EVIDENCE_IDS),
 }).strict();
 
 export const transcriptSummarySchema = z.object({
@@ -65,6 +67,20 @@ export const transcriptSummarySchema = z.object({
 }).strict();
 
 export type GeneratedTranscriptSummary = z.infer<typeof transcriptSummarySchema>;
+
+const modelCitedTextSchema = citedTextSchema.extend({
+  evidenceIds: z.array(z.string().trim().min(1)).min(1),
+}).strict();
+
+const modelConceptSchema = conceptSchema.extend({
+  evidenceIds: z.array(z.string().trim().min(1)).min(1),
+}).strict();
+
+const modelTranscriptSummarySchema = transcriptSummarySchema.extend({
+  overview: modelCitedTextSchema,
+  keyPoints: z.array(modelCitedTextSchema).min(1).max(16),
+  concepts: z.array(modelConceptSchema).max(12),
+}).strict();
 
 export interface PreparedTranscriptSummary {
   readonly sourcePath: string;
@@ -111,7 +127,7 @@ function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
         required: ['text', 'evidenceIds'],
         properties: {
           text: { type: 'string' },
-          evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+          evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
         },
       },
       keyPoints: {
@@ -123,7 +139,7 @@ function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
           required: ['text', 'evidenceIds'],
           properties: {
             text: { type: 'string' },
-            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
           },
         },
       },
@@ -136,7 +152,7 @@ function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
           properties: {
             name: { type: 'string' },
             explanation: { type: 'string' },
-            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
           },
         },
       },
@@ -146,7 +162,11 @@ function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
 
 const readerNotesSchema = z.object({
   notes: z.string().trim().min(1).max(MAX_WORKING_NOTES_CHARACTERS),
-  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(48),
+  evidenceIds: z.array(z.string().trim().min(1)).min(1).max(MAX_READER_EVIDENCE_IDS),
+}).strict();
+
+const modelReaderNotesSchema = readerNotesSchema.extend({
+  evidenceIds: z.array(z.string().trim().min(1)).min(1),
 }).strict();
 
 function readerNotesResponseSchema(allowedEvidenceIds: readonly string[]) {
@@ -156,7 +176,7 @@ function readerNotesResponseSchema(allowedEvidenceIds: readonly string[]) {
     required: ['notes', 'evidenceIds'],
     properties: {
       notes: { type: 'string' },
-      evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 48),
+      evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_READER_EVIDENCE_IDS),
     },
   } as const;
 }
@@ -335,6 +355,38 @@ function validateEvidenceReferences(summary: GeneratedTranscriptSummary, allowed
   }
 }
 
+function selectRepresentativeEvidenceIds(
+  evidenceIds: readonly string[],
+  maximum: number,
+): readonly string[] {
+  const unique = [...new Set(evidenceIds)];
+  if (unique.length <= maximum) return unique;
+  if (maximum === 1) return [unique[0]!];
+  return Array.from({ length: maximum }, (_, index) => (
+    unique[Math.round(index * (unique.length - 1) / (maximum - 1))]!
+  ));
+}
+
+function normalizeTranscriptSummary(
+  summary: z.infer<typeof modelTranscriptSummarySchema>,
+): GeneratedTranscriptSummary {
+  return transcriptSummarySchema.parse({
+    ...summary,
+    overview: {
+      ...summary.overview,
+      evidenceIds: selectRepresentativeEvidenceIds(summary.overview.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
+    },
+    keyPoints: summary.keyPoints.map((item) => ({
+      ...item,
+      evidenceIds: selectRepresentativeEvidenceIds(item.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
+    })),
+    concepts: summary.concepts.map((item) => ({
+      ...item,
+      evidenceIds: selectRepresentativeEvidenceIds(item.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
+    })),
+  });
+}
+
 function finalEvidencePayload(
   prepared: PreparedTranscriptSummary,
   evidenceIds: readonly string[],
@@ -377,10 +429,12 @@ async function readDocumentWindow(
   const allowedEvidenceIds = [...new Set([...previousEvidenceIds, ...window.evidenceIds])];
   const task = [
     `Read window ${windowIndex + 1} of ${windowCount} from the transcript working document.`,
-    'Update one concise global set of working notes; integrate new information with earlier notes instead of summarizing this window independently.',
-    'Preserve cross-section arguments, changes of position, contradictions, examples, and unresolved questions.',
+    'Update one concise global set of viewpoint-level working notes; integrate new information with earlier notes instead of summarizing this window independently.',
+    'Focus on theses, arguments, supporting reasons, disagreements, changes of position, conclusions, and only the examples needed to understand them.',
+    'Do not produce a sentence-by-sentence recap and do not retain one evidence id for every subtitle line.',
     `Keep notes under ${MAX_WORKING_NOTES_CHARACTERS} characters.`,
     `Allowed evidenceIds: ${allowedEvidenceIds.join(', ')}.`,
+    `Select at most ${MAX_READER_EVIDENCE_IDS} representative evidence anchors for the global viewpoints, ordered by importance. Do not return the complete allowlist.`,
     'Return only JSON. evidenceIds must contain only values from that allowlist.',
     'Never put a sourceId, document path, window id, or working-notes id in evidenceIds.',
   ].join(' ');
@@ -404,10 +458,14 @@ async function readDocumentWindow(
     responseFormat: 'json',
     responseSchema: readerNotesResponseSchema(allowedEvidenceIds),
   }, context);
-  const result = parseStructuredOutput(completion.content, readerNotesSchema);
-  for (const id of result.evidenceIds) {
+  const modelResult = parseStructuredOutput(completion.content, modelReaderNotesSchema);
+  for (const id of modelResult.evidenceIds) {
     if (!allowedEvidenceIds.includes(id)) throw new Error(`The document reader cited unknown transcript evidence "${id}".`);
   }
+  const result = readerNotesSchema.parse({
+    ...modelResult,
+    evidenceIds: selectRepresentativeEvidenceIds(modelResult.evidenceIds, MAX_READER_EVIDENCE_IDS),
+  });
   return { notes: result.notes, evidenceIds: result.evidenceIds, completion };
 }
 
@@ -432,8 +490,9 @@ async function completeSummary(
     responseFormat: 'json',
     responseSchema: summaryResponseSchema(allowedIds),
   }, context);
-  const summary = parseStructuredOutput(completion.content, transcriptSummarySchema);
-  validateEvidenceReferences(summary, allowedIds);
+  const modelSummary = parseStructuredOutput(completion.content, modelTranscriptSummarySchema);
+  validateEvidenceReferences(modelSummary, allowedIds);
+  const summary = normalizeTranscriptSummary(modelSummary);
   return { summary, completion };
 }
 
@@ -465,9 +524,10 @@ export async function generateTranscriptSummary(
   const task = [
     `Create a ${requestedTemplate} summary in the language primarily used by the transcript.`,
     templateGuidance[requestedTemplate],
+    'Synthesize the video author\'s main viewpoints and reasoning instead of recapping the transcript sentence by sentence.',
     'Return only the requested JSON object.',
-    'Every overview, key point, and concept must cite one or more evidenceIds supplied in the source data.',
-    'Do not introduce facts that are not supported by those evidence segments.',
+    `Use only 1-${MAX_SUMMARY_EVIDENCE_IDS} representative evidenceIds for each overview, key point, or concept as playback anchors for the whole viewpoint, not as citations for every sentence.`,
+    'Do not introduce facts that are not supported by the transcript; evidence anchors are representative rather than exhaustive.',
   ].join(' ');
   const windows = buildDocumentWindows(prepared.evidence);
   const completions: AICompletion[] = [];

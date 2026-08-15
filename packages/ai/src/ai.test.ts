@@ -361,4 +361,63 @@ describe('AI security boundaries', () => {
     expect(generated.summary.overview.evidenceIds[0]).toMatch(/^segment-/u);
     expect(generated.completion.usage).toEqual({ inputTokens: calls.length * 100, outputTokens: calls.length * 20 });
   });
+
+  it('keeps viewpoint-level evidence sparse when a local model returns every allowed subtitle id', async () => {
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/dense-captions.md',
+      sourceRevision: 'revision-dense',
+      title: 'Dense caption commentary',
+      resource: 'assets/media/dense-captions.mp4',
+      segments: Array.from({ length: 180 }, (_, index) => ({
+        startMs: index * 2_000,
+        endMs: index * 2_000 + 1_800,
+        text: `字幕句 ${index + 1} 说明视频观点的一个细节。`,
+      })),
+    });
+    let finalEvidenceAllowlistLength = 0;
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        const properties = (request.responseSchema as {
+          readonly properties?: Record<string, unknown>;
+        } | undefined)?.properties;
+        if (!properties) throw new Error('The request did not provide a response schema.');
+        if ('notes' in properties) {
+          const evidenceIds = ((properties.evidenceIds as {
+            readonly items?: { readonly enum?: readonly string[] };
+          }).items?.enum ?? []);
+          return Promise.resolve({
+            content: JSON.stringify({
+              notes: '视频围绕一个核心观点展开，并用连续细节加以说明。',
+              evidenceIds,
+            }),
+            model: 'test-model', finishReason: 'stop',
+          });
+        }
+        const overview = properties.overview as {
+          readonly properties?: { readonly evidenceIds?: { readonly items?: { readonly enum?: readonly string[] } } };
+        };
+        const evidenceIds = overview.properties?.evidenceIds?.items?.enum ?? [];
+        finalEvidenceAllowlistLength = evidenceIds.length;
+        if (evidenceIds.length === 0) throw new Error('The final synthesis did not receive representative evidence.');
+        return Promise.resolve({
+          content: JSON.stringify({
+            title: '观点摘要',
+            overview: { text: '视频提出并论证了一个核心观点。', evidenceIds },
+            keyPoints: [{ text: '连续细节服务于同一论点。', evidenceIds }],
+            concepts: [],
+          }),
+          model: 'test-model', finishReason: 'stop',
+        });
+      },
+    };
+
+    const generated = await generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
+    }, prepared);
+
+    expect(prepared.processingMode).toBe('document-reader');
+    expect(finalEvidenceAllowlistLength).toBeLessThanOrEqual(24);
+    expect(generated.summary.overview.evidenceIds).toHaveLength(3);
+  });
 });
