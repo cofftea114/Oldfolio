@@ -137,7 +137,10 @@ describe('desktop AI summary workflow', () => {
     });
     const pending = await service.generate(transcript.path, preparation.sourceRevision, preparation.suggestedTemplate);
     expect(pending).toMatchObject({ riskLevel: 'L1', model: 'qwen3:8b', usage: { inputTokens: 100, outputTokens: 80 } });
-    expect(pending.content).toContain('[00:01](assets/media/lesson.mp4#t=1.000)');
+    expect(pending.content).toContain('## 核心结论');
+    expect(pending.content).toContain('## 作者的主要观点');
+    expect(pending.content).toContain('[定位 00:01](assets/media/lesson.mp4#t=1.000)');
+    expect(pending.content).not.toContain('## 概念');
     const workingDocument = await vault.read(`.oldfolio/cache/ai-inputs/${preparation.sourceRevision}.txt`);
     expect(workingDocument.text).toContain('[segment-00001 00:00:01.000]');
     await expect(vault.read(pending.targetPath)).rejects.toBeInstanceOf(VaultNotFoundError);

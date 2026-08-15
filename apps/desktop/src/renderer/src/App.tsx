@@ -44,7 +44,7 @@ const SUMMARY_TEMPLATE_LABELS: Readonly<Record<AISummaryTemplate, string>> = {
   podcast: '播客',
   tutorial: '教程',
   meeting: '会议',
-  'news-commentary': '新闻评论',
+  'news-commentary': '观点 / 时事评论',
   debate: '辩论',
   review: '评测',
 };

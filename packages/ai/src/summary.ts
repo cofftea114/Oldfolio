@@ -18,12 +18,13 @@ const MAX_SOURCE_CHARACTERS = 200_000;
 const MAX_DOCUMENT_WINDOW_CHARACTERS = 3_500;
 const MAX_SEGMENT_PART_CHARACTERS = 2_500;
 const MAX_WORKING_NOTES_CHARACTERS = 1_800;
-const MAX_FINAL_EVIDENCE_CHARACTERS = 4_800;
+const MAX_FINAL_CHECKPOINT_CHARACTERS = 5_000;
+const MAX_FINAL_SYNTHESIS_CHARACTERS = 10_000;
 const MAX_READER_EVIDENCE_IDS = 24;
-const MAX_SUMMARY_EVIDENCE_IDS = 3;
+const MAX_SUMMARY_EVIDENCE_IDS = 1;
 const MAX_READER_OUTPUT_TOKENS = 1_024;
 const MAX_OUTPUT_TOKENS_PER_CALL = 1_536;
-const PROMPT_VERSION = 'transcript-summary-v5-viewpoint-synthesis';
+const PROMPT_VERSION = 'transcript-summary-v6-readable-viewpoints';
 
 export interface TranscriptSummarySegment {
   readonly startMs: number;
@@ -211,6 +212,22 @@ interface DocumentWindow {
   readonly evidenceIds: readonly string[];
 }
 
+type SummaryOutputLanguage = 'Simplified Chinese' | 'English';
+
+function detectSummaryOutputLanguage(prepared: Pick<PreparedTranscriptSummary, 'title' | 'evidence'>): SummaryOutputLanguage {
+  const sample = `${prepared.title}\n${prepared.evidence.map((item) => item.text).join('\n')}`;
+  const hanCharacters = sample.match(/[\p{Script=Han}]/gu)?.length ?? 0;
+  const latinCharacters = sample.match(/[a-zA-Z]/gu)?.length ?? 0;
+  return hanCharacters >= Math.max(8, Math.ceil(latinCharacters / 2)) ? 'Simplified Chinese' : 'English';
+}
+
+function outputLanguageInstruction(language: SummaryOutputLanguage): string {
+  if (language === 'Simplified Chinese') {
+    return 'Every generated text field must use Simplified Chinese, including working notes, title, overview, key points, concept names, and explanations. Never answer in English.';
+  }
+  return 'Every generated text field must use English, including working notes, title, overview, key points, concept names, and explanations.';
+}
+
 function displayTimestamp(milliseconds: number): string {
   const totalSeconds = Math.floor(milliseconds / 1_000);
   const hours = Math.floor(totalSeconds / 3_600);
@@ -387,12 +404,23 @@ function normalizeTranscriptSummary(
   });
 }
 
+function compactReadingCheckpoints(checkpoints: readonly string[]): readonly { readonly order: number; readonly notes: string }[] {
+  const unique = [...new Set(checkpoints.map((checkpoint) => checkpoint.trim()).filter(Boolean))];
+  if (unique.length === 0) throw new Error('The document reader did not produce any viewpoint checkpoints.');
+  const charactersPerCheckpoint = Math.max(240, Math.floor(MAX_FINAL_CHECKPOINT_CHARACTERS / unique.length));
+  return unique.map((notes, index) => ({
+    order: index + 1,
+    notes: notes.slice(0, charactersPerCheckpoint),
+  }));
+}
+
 function finalEvidencePayload(
   prepared: PreparedTranscriptSummary,
   evidenceIds: readonly string[],
-  notes: string,
+  checkpoints: readonly string[],
 ): string {
   const allowed = new Set(evidenceIds);
+  const readingCheckpoints = compactReadingCheckpoints(checkpoints);
   const selected: object[] = [];
   for (const item of prepared.evidence) {
     if (!allowed.has(item.id)) continue;
@@ -403,12 +431,12 @@ function finalEvidencePayload(
       text: item.text.slice(0, 320),
       ...(item.speaker === undefined ? {} : { speaker: item.speaker }),
     }];
-    const serialized = JSON.stringify({ documentPath: prepared.workingDocumentPath, notes, evidence: candidate });
-    if (serialized.length > MAX_FINAL_EVIDENCE_CHARACTERS) break;
+    const serialized = JSON.stringify({ documentPath: prepared.workingDocumentPath, readingCheckpoints, evidence: candidate });
+    if (serialized.length > MAX_FINAL_SYNTHESIS_CHARACTERS) break;
     selected.push(candidate.at(-1)!);
   }
   if (selected.length === 0) throw new Error('The document reader did not retain any usable transcript evidence.');
-  return JSON.stringify({ documentPath: prepared.workingDocumentPath, notes, evidence: selected });
+  return JSON.stringify({ documentPath: prepared.workingDocumentPath, readingCheckpoints, evidence: selected });
 }
 
 async function readDocumentWindow(
@@ -420,6 +448,7 @@ async function readDocumentWindow(
   windowCount: number,
   previousNotes: string,
   previousEvidenceIds: readonly string[],
+  outputLanguage: SummaryOutputLanguage,
   context?: AIInvocationContext,
 ): Promise<{
   readonly notes: string;
@@ -429,9 +458,12 @@ async function readDocumentWindow(
   const allowedEvidenceIds = [...new Set([...previousEvidenceIds, ...window.evidenceIds])];
   const task = [
     `Read window ${windowIndex + 1} of ${windowCount} from the transcript working document.`,
+    `The document title is: ${prepared.title}. Use it as context for resolving speech-recognition errors.`,
+    outputLanguageInstruction(outputLanguage),
     'Update one concise global set of viewpoint-level working notes; integrate new information with earlier notes instead of summarizing this window independently.',
     'Focus on theses, arguments, supporting reasons, disagreements, changes of position, conclusions, and only the examples needed to understand them.',
     'Do not produce a sentence-by-sentence recap and do not retain one evidence id for every subtitle line.',
+    'Never promote a suspicious or garbled transcript token into a named idea. Omit it when the meaning is unclear, or explicitly mark it as transcription-uncertain.',
     `Keep notes under ${MAX_WORKING_NOTES_CHARACTERS} characters.`,
     `Allowed evidenceIds: ${allowedEvidenceIds.join(', ')}.`,
     `Select at most ${MAX_READER_EVIDENCE_IDS} representative evidence anchors for the global viewpoints, ordered by importance. Do not return the complete allowlist.`,
@@ -521,10 +553,17 @@ export async function generateTranscriptSummary(
 ): Promise<GenerateTranscriptSummaryResult> {
   assertTemplate(requestedTemplate);
   if (!config.model.trim()) throw new Error('An AI model must be selected before generating a summary.');
+  const outputLanguage = detectSummaryOutputLanguage(prepared);
   const task = [
     `Create a ${requestedTemplate} summary in the language primarily used by the transcript.`,
+    `The source title is: ${prepared.title}.`,
+    outputLanguageInstruction(outputLanguage),
     templateGuidance[requestedTemplate],
     'Synthesize the video author\'s main viewpoints and reasoning instead of recapping the transcript sentence by sentence.',
+    'Write a plain, concrete title and overview that a general reader can understand without watching the video first.',
+    'Make key points non-overlapping: each key point should state one viewpoint and briefly explain the author\'s reasoning.',
+    'Concepts are only for terms that genuinely need a separate definition; return an empty concepts array rather than repeating key points.',
+    'The transcript may contain speech-recognition errors. Use the source title and surrounding argument to resolve only obvious errors. Never repeat a suspicious token as a named idea; omit it or explicitly mark it as transcription-uncertain.',
     'Return only the requested JSON object.',
     `Use only 1-${MAX_SUMMARY_EVIDENCE_IDS} representative evidenceIds for each overview, key point, or concept as playback anchors for the whole viewpoint, not as citations for every sentence.`,
     'Do not introduce facts that are not supported by the transcript; evidence anchors are representative rather than exhaustive.',
@@ -552,6 +591,8 @@ export async function generateTranscriptSummary(
 
   let notes = '';
   let retainedEvidenceIds: readonly string[] = [];
+  const readingCheckpoints: string[] = [];
+  let allEvidenceIds: readonly string[] = [];
   for (const [index, window] of windows.entries()) {
     const read = await readDocumentWindow(
       provider,
@@ -562,21 +603,26 @@ export async function generateTranscriptSummary(
       windows.length,
       notes,
       retainedEvidenceIds,
+      outputLanguage,
       context,
     );
     notes = read.notes;
     retainedEvidenceIds = read.evidenceIds;
+    readingCheckpoints.push(read.notes);
+    allEvidenceIds = [...new Set([...allEvidenceIds, ...read.evidenceIds])];
     completions.push(read.completion);
   }
+
+  const representativeEvidenceIds = selectRepresentativeEvidenceIds(allEvidenceIds, MAX_READER_EVIDENCE_IDS);
 
   const final = await completeSummary(
     provider,
     config,
-    `${task} Use the global working notes produced after reading the complete document, and return the final synthesis now.`,
+    `${task} Use every reading checkpoint from the complete document, cover the early, middle, and late arguments, remove repetition, and return the final synthesis now.`,
     `${prepared.workingDocumentPath}#final-synthesis`,
     'application/vnd.oldfolio.document-notes+json',
-    finalEvidencePayload(prepared, retainedEvidenceIds, notes),
-    retainedEvidenceIds,
+    finalEvidencePayload(prepared, representativeEvidenceIds, readingCheckpoints),
+    representativeEvidenceIds,
     context,
   );
   completions.push(final.completion);

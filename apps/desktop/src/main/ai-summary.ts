@@ -80,6 +80,17 @@ function defaultProvider(providerId: LocalAIProviderId): AIProvider {
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+const summaryTemplateLabels: Readonly<Record<SummaryTemplate, string>> = {
+  course: '课程',
+  interview: '访谈',
+  podcast: '播客',
+  tutorial: '教程',
+  meeting: '会议',
+  'news-commentary': '观点 / 时事评论',
+  debate: '辩论',
+  review: '评测',
+};
+
 function revision(snapshot: VaultFileSnapshot): DocumentRevision {
   return {
     path: snapshot.path,
@@ -114,7 +125,7 @@ function markdownText(value: string): string {
 
 function citationLink(resource: string, evidence: SummaryEvidence): string {
   const separator = resource.includes('#') ? '&' : '#';
-  return `[${displayTime(evidence.startMs)}](${resource}${separator}t=${(evidence.startMs / 1_000).toFixed(3)})`;
+  return `[定位 ${displayTime(evidence.startMs)}](${resource}${separator}t=${(evidence.startMs / 1_000).toFixed(3)})`;
 }
 
 function summaryPath(sourcePath: string): string {
@@ -232,26 +243,24 @@ export class AISummaryService {
       `# ${markdownText(generated.summary.title)}`,
       '',
       `> 来源：[[${sourcePath}]]`,
-      `> 模板：${generated.template}`,
+      `> 摘要方式：${summaryTemplateLabels[generated.template]}`,
+      '> 提示：本笔记根据自动转录生成；原转录可能存在识别错误，请通过“定位”链接返回视频核对。',
       '',
-      '## 摘要',
+      '## 核心结论',
       '',
       `${markdownText(generated.summary.overview.text)} ${links(generated.summary.overview.evidenceIds)}`,
       '',
-      '## 核心要点',
+      '## 作者的主要观点',
       '',
       ...generated.summary.keyPoints.map((item) => `- ${markdownText(item.text)} ${links(item.evidenceIds)}`),
-      '',
-      '## 概念',
-      '',
       ...(generated.summary.concepts.length === 0
-        ? ['暂无单独概念。']
-        : generated.summary.concepts.flatMap((item) => [
+        ? []
+        : ['', '## 关键词与背景', '', ...generated.summary.concepts.flatMap((item) => [
             `### ${markdownText(item.name)}`,
             '',
             `${markdownText(item.explanation)} ${links(item.evidenceIds)}`,
             '',
-          ])),
+          ])]),
     ].join('\n');
     const content = serializeNewOkfConcept({
       frontmatter: {

@@ -156,6 +156,9 @@ describe('AI security boundaries', () => {
     expect(classifySummaryTemplate({ title: '安装教程：三个步骤', sourceKind: 'video' }).template).toBe(
       'tutorial',
     );
+    expect(classifySummaryTemplate({ title: '剖析理想与现实的长期博弈', sourceKind: 'video' }).template).toBe(
+      'news-commentary',
+    );
   });
 
   it('separates untrusted imported content from trusted instructions', () => {
@@ -242,6 +245,12 @@ describe('AI security boundaries', () => {
       complete: (_config, request) => {
         expect(request.messages[0]?.content).toContain('untrusted data');
         expect(request.messages.at(-1)?.content).toContain('segment-00001');
+        expect(request.messages.map((message) => message.content).join('\n')).toContain(
+          'Every generated text field must use Simplified Chinese',
+        );
+        expect(request.messages.map((message) => message.content).join('\n')).toContain(
+          '安装教程：三个步骤',
+        );
         return Promise.resolve({
           content: JSON.stringify({
             title: '安装步骤摘要',
@@ -375,6 +384,7 @@ describe('AI security boundaries', () => {
       })),
     });
     let finalEvidenceAllowlistLength = 0;
+    let readerCallCount = 0;
     const provider: AIProvider = {
       id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
       complete: (_config, request) => {
@@ -383,12 +393,19 @@ describe('AI security boundaries', () => {
         } | undefined)?.properties;
         if (!properties) throw new Error('The request did not provide a response schema.');
         if ('notes' in properties) {
-          const evidenceIds = ((properties.evidenceIds as {
-            readonly items?: { readonly enum?: readonly string[] };
-          }).items?.enum ?? []);
+          readerCallCount += 1;
+          const dataMessage = request.messages.at(-1)?.content ?? '';
+          const serializedEnvelope = dataMessage
+            .replace(/^UNTRUSTED_DATA_JSON\n/u, '')
+            .replace(/\nEND_UNTRUSTED_DATA_JSON$/u, '');
+          const envelope = JSON.parse(serializedEnvelope) as {
+            readonly records: readonly { readonly sourceId: string; readonly content: string }[];
+          };
+          const windowRecord = envelope.records.find((record) => record.sourceId.includes('#window-'));
+          const evidenceIds = [...new Set(windowRecord?.content.match(/segment-\d{5}/gu) ?? [])];
           return Promise.resolve({
             content: JSON.stringify({
-              notes: '视频围绕一个核心观点展开，并用连续细节加以说明。',
+              notes: `第 ${readerCallCount} 个阅读窗口保留的独立观点。`,
               evidenceIds,
             }),
             model: 'test-model', finishReason: 'stop',
@@ -400,6 +417,10 @@ describe('AI security boundaries', () => {
         const evidenceIds = overview.properties?.evidenceIds?.items?.enum ?? [];
         finalEvidenceAllowlistLength = evidenceIds.length;
         if (evidenceIds.length === 0) throw new Error('The final synthesis did not receive representative evidence.');
+        const finalPrompt = request.messages.map((message) => message.content).join('\n');
+        for (let index = 1; index <= readerCallCount; index += 1) {
+          expect(finalPrompt).toContain(`第 ${index} 个阅读窗口保留的独立观点。`);
+        }
         return Promise.resolve({
           content: JSON.stringify({
             title: '观点摘要',
@@ -417,7 +438,8 @@ describe('AI security boundaries', () => {
     }, prepared);
 
     expect(prepared.processingMode).toBe('document-reader');
+    expect(readerCallCount).toBeGreaterThan(1);
     expect(finalEvidenceAllowlistLength).toBeLessThanOrEqual(24);
-    expect(generated.summary.overview.evidenceIds).toHaveLength(3);
+    expect(generated.summary.overview.evidenceIds).toHaveLength(1);
   });
 });

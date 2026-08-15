@@ -42,9 +42,11 @@ claim that the planned 9–12 month v1 is complete.
   Transcript notes, automatically select a summary template, disclose the exact untrusted-data
   payload, estimated input size, and direct/document-reader processing plan. A revision-bound plain-text
   working document is stored in the non-synchronized cache. Long inputs within the 200,000-character
-  safety limit are read through bounded windows into one evolving global notebook rather than independent
-  summaries, with original evidence IDs validated at every step. Preview the complete OKF `Synthesis` content
-  and diff, and apply or undo the resulting L1/L2 change set.
+  safety limit are read through bounded windows into viewpoint-level notebook checkpoints rather than
+  independent summaries. The final synthesis retains coverage across the whole document, deterministically
+  follows the transcript's Chinese/English language, and uses one representative playback anchor per viewpoint;
+  original evidence IDs remain validated at every step. Preview the complete OKF `Synthesis` content and diff,
+  and apply or undo the resulting L1/L2 change set.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.
 

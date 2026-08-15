@@ -31,7 +31,7 @@ const KEYWORDS: Readonly<Record<SummaryTemplate, readonly string[]>> = {
   podcast: ['播客', 'podcast', 'episode', 'shownotes'],
   tutorial: ['教程', '步骤', 'how to', 'tutorial', '实操', '安装'],
   meeting: ['会议', '议程', '待办', 'meeting', 'action item', 'minutes'],
-  'news-commentary': ['新闻', '时事', 'breaking', 'news', '报道', '评论'],
+  'news-commentary': ['新闻', '时事', '观点', '分析', '剖析', '解读', 'breaking', 'news', '报道', '评论'],
   debate: ['辩论', '正方', '反方', 'debate', 'rebuttal', '反驳'],
   review: ['评测', '测评', 'review', '优缺点', '体验', '评分'],
 };
