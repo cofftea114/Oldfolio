@@ -21,7 +21,7 @@ const MAX_WORKING_NOTES_CHARACTERS = 1_800;
 const MAX_FINAL_EVIDENCE_CHARACTERS = 4_800;
 const MAX_READER_OUTPUT_TOKENS = 1_024;
 const MAX_OUTPUT_TOKENS_PER_CALL = 1_536;
-const PROMPT_VERSION = 'transcript-summary-v3-document-reader';
+const PROMPT_VERSION = 'transcript-summary-v4-evidence-allowlist';
 
 export interface TranscriptSummarySegment {
   readonly startMs: number;
@@ -89,64 +89,77 @@ export interface GenerateTranscriptSummaryResult {
   readonly promptVersion: string;
 }
 
-const responseSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['title', 'overview', 'keyPoints', 'concepts'],
-  properties: {
-    title: { type: 'string' },
-    overview: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['text', 'evidenceIds'],
-      properties: {
-        text: { type: 'string' },
-        evidenceIds: { type: 'array', minItems: 1, items: { type: 'string' } },
-      },
-    },
-    keyPoints: {
-      type: 'array',
-      minItems: 1,
-      items: {
+function evidenceIdsResponseSchema(allowedEvidenceIds: readonly string[], maxItems: number) {
+  return {
+    type: 'array',
+    minItems: 1,
+    maxItems,
+    items: { type: 'string', enum: allowedEvidenceIds },
+  } as const;
+}
+
+function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['title', 'overview', 'keyPoints', 'concepts'],
+    properties: {
+      title: { type: 'string' },
+      overview: {
         type: 'object',
         additionalProperties: false,
         required: ['text', 'evidenceIds'],
         properties: {
           text: { type: 'string' },
-          evidenceIds: { type: 'array', minItems: 1, items: { type: 'string' } },
+          evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+        },
+      },
+      keyPoints: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['text', 'evidenceIds'],
+          properties: {
+            text: { type: 'string' },
+            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+          },
+        },
+      },
+      concepts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['name', 'explanation', 'evidenceIds'],
+          properties: {
+            name: { type: 'string' },
+            explanation: { type: 'string' },
+            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 8),
+          },
         },
       },
     },
-    concepts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['name', 'explanation', 'evidenceIds'],
-        properties: {
-          name: { type: 'string' },
-          explanation: { type: 'string' },
-          evidenceIds: { type: 'array', minItems: 1, items: { type: 'string' } },
-        },
-      },
-    },
-  },
-} as const;
+  } as const;
+}
 
 const readerNotesSchema = z.object({
   notes: z.string().trim().min(1).max(MAX_WORKING_NOTES_CHARACTERS),
   evidenceIds: z.array(z.string().trim().min(1)).min(1).max(48),
 }).strict();
 
-const readerNotesResponseSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['notes', 'evidenceIds'],
-  properties: {
-    notes: { type: 'string' },
-    evidenceIds: { type: 'array', minItems: 1, maxItems: 48, items: { type: 'string' } },
-  },
-} as const;
+function readerNotesResponseSchema(allowedEvidenceIds: readonly string[]) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['notes', 'evidenceIds'],
+    properties: {
+      notes: { type: 'string' },
+      evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, 48),
+    },
+  } as const;
+}
 
 const templateGuidance: Readonly<Record<SummaryTemplate, string>> = {
   course: 'Organize learning objectives, core explanations, examples, and review points.',
@@ -367,7 +380,9 @@ async function readDocumentWindow(
     'Update one concise global set of working notes; integrate new information with earlier notes instead of summarizing this window independently.',
     'Preserve cross-section arguments, changes of position, contradictions, examples, and unresolved questions.',
     `Keep notes under ${MAX_WORKING_NOTES_CHARACTERS} characters.`,
-    'Return only JSON. evidenceIds may contain only segment ids present in prior notes or this document window.',
+    `Allowed evidenceIds: ${allowedEvidenceIds.join(', ')}.`,
+    'Return only JSON. evidenceIds must contain only values from that allowlist.',
+    'Never put a sourceId, document path, window id, or working-notes id in evidenceIds.',
   ].join(' ');
   const boundary = createPromptDataBoundary(task, [
     {
@@ -387,7 +402,7 @@ async function readDocumentWindow(
     temperature: 0.1,
     maxOutputTokens: MAX_READER_OUTPUT_TOKENS,
     responseFormat: 'json',
-    responseSchema: readerNotesResponseSchema,
+    responseSchema: readerNotesResponseSchema(allowedEvidenceIds),
   }, context);
   const result = parseStructuredOutput(completion.content, readerNotesSchema);
   for (const id of result.evidenceIds) {
@@ -406,6 +421,8 @@ async function completeSummary(
   allowedEvidenceIds: Iterable<string>,
   context?: AIInvocationContext,
 ): Promise<{ readonly summary: GeneratedTranscriptSummary; readonly completion: AICompletion }> {
+  const allowedIds = [...new Set(allowedEvidenceIds)];
+  if (allowedIds.length === 0) throw new Error('At least one transcript evidence id is required for a summary.');
   const boundary = createPromptDataBoundary(task, [{ sourceId, mediaType, content }]);
   const completion = await provider.complete(config, {
     model: config.model,
@@ -413,10 +430,10 @@ async function completeSummary(
     temperature: 0.2,
     maxOutputTokens: MAX_OUTPUT_TOKENS_PER_CALL,
     responseFormat: 'json',
-    responseSchema,
+    responseSchema: summaryResponseSchema(allowedIds),
   }, context);
   const summary = parseStructuredOutput(completion.content, transcriptSummarySchema);
-  validateEvidenceReferences(summary, allowedEvidenceIds);
+  validateEvidenceReferences(summary, allowedIds);
   return { summary, completion };
 }
 

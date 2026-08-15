@@ -312,10 +312,18 @@ describe('AI security boundaries', () => {
         if (!firstEvidenceId) throw new Error('The request did not contain source evidence.');
         const properties = (request.responseSchema as { readonly properties?: Record<string, unknown> } | undefined)?.properties;
         if (properties && 'notes' in properties) {
+          const evidenceIdSchema = properties.evidenceIds as {
+            readonly items?: { readonly enum?: readonly string[] };
+          } | undefined;
+          const schemaEvidenceIds = evidenceIdSchema?.items?.enum;
+          const sourceRecordId = request.messages
+            .flatMap((message) => message.content.match(/\.oldfolio\/cache\/ai-inputs\/[^"\\]+#window-\d+/gu) ?? [])[0];
+          const returnedEvidenceIds = schemaEvidenceIds?.slice(0, 12)
+            ?? (sourceRecordId ? [sourceRecordId] : evidenceIds.slice(0, 12));
           return Promise.resolve({
             content: JSON.stringify({
-              notes: `Global working notes retain ${evidenceIds.slice(0, 12).join(', ')}.`,
-              evidenceIds: evidenceIds.slice(0, 12),
+              notes: `Global working notes retain ${returnedEvidenceIds.join(', ')}.`,
+              evidenceIds: returnedEvidenceIds,
             }),
             model: 'test-model', finishReason: 'stop',
             usage: { inputTokens: 100, outputTokens: 20 },
