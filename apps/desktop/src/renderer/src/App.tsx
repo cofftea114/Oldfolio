@@ -56,7 +56,7 @@ const LOCAL_AI_PROVIDER_LABELS: Readonly<Record<AILocalProviderId, string>> = {
 
 const LOCAL_AI_DEFAULT_ENDPOINTS: Readonly<Record<AILocalProviderId, string>> = {
   ollama: 'http://127.0.0.1:11434/api/',
-  'openai-compatible': 'http://127.0.0.1:1234/v1/',
+  'openai-compatible': 'http://127.0.0.1:1234/api/v1/',
 };
 
 export function App() {
@@ -564,7 +564,7 @@ export function App() {
                 }}
               >
                 <option value="ollama">Ollama</option>
-                <option value="openai-compatible">LM Studio（OpenAI-compatible）</option>
+                <option value="openai-compatible">LM Studio（原生 API）</option>
               </select>
             </label>
             <label className="field-label">服务地址
@@ -661,8 +661,9 @@ export function App() {
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
-                  <div><dt>处理方式</dt><dd>{summaryPreparation.processingMode === 'hierarchical'
-                    ? `分层摘要（预计 ${summaryPreparation.estimatedModelCalls} 次本地调用）`
+                  <div><dt>工作文件</dt><dd>{summaryPreparation.workingDocumentPath}</dd></div>
+                  <div><dt>处理方式</dt><dd>{summaryPreparation.processingMode === 'document-reader'
+                    ? `文档读取器（预计 ${summaryPreparation.estimatedModelCalls} 次本地调用）`
                     : '单次摘要'}</dd></div>
                   <div><dt>预计费用</dt><dd>¥0（本地）</dd></div>
                 </dl>
@@ -674,7 +675,7 @@ export function App() {
                   </select>
                 </label>
                 <details>
-                  <summary>查看将发送给模型的完整内容</summary>
+                  <summary>查看模型将读取的完整工作文档</summary>
                   <pre>{summaryPreparation.sourcePreview}</pre>
                 </details>
                 <button disabled={aiBusy} onClick={() => void generateAISummary()}>

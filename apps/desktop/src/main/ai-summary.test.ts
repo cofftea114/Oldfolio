@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AIProvider } from '@oldfolio/domain';
-import { OpenAICompatibleProvider } from '@oldfolio/ai';
+import { LMStudioProvider } from '@oldfolio/ai';
 import { compileTranscriptDocument } from '@oldfolio/media';
 import { parseOkfDocument } from '@oldfolio/okf';
 import { VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
@@ -25,9 +25,9 @@ afterEach(async () => {
 });
 
 describe('desktop AI summary workflow', () => {
-  it('normalizes an LM Studio root URL to its OpenAI-compatible v1 API', () => {
+  it('normalizes an LM Studio root URL to its native v1 API', () => {
     expect(normalizeLocalAIEndpoint('openai-compatible', 'http://127.0.0.1:1234')).toBe(
-      'http://127.0.0.1:1234/v1/',
+      'http://127.0.0.1:1234/api/v1/',
     );
   });
 
@@ -49,19 +49,15 @@ describe('desktop AI summary workflow', () => {
     expect(() => normalizeLocalOllamaEndpoint('https://models.example.test/api/')).toThrow(/本机 AI/);
   });
 
-  it('routes LM Studio model discovery through the OpenAI-compatible v1 endpoint', async () => {
+  it('routes LM Studio model discovery through the native v1 endpoint', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oldfolio-lm-studio-'));
     roots.push(root);
     const vault = await VaultRepository.open(join(root, 'vault'));
     await vault.initialize();
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
-      object: 'list',
-      data: [{ id: 'google/gemma-4-e4b', object: 'model', owned_by: 'organization_owner' }],
+      models: [{ type: 'llm', key: 'google/gemma-4-e4b', display_name: 'Gemma 4 E4B' }],
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
-    const lmStudio = new OpenAICompatibleProvider({
-      endpointPolicy: { allowLocalhostHttp: true },
-      fetch: fetchMock,
-    });
+    const lmStudio = new LMStudioProvider({ fetch: fetchMock });
     const configStore = new AIDeviceConfigStore(join(root, 'ai.json'));
     const service = new AISummaryService(
       vault,
@@ -72,15 +68,15 @@ describe('desktop AI summary workflow', () => {
       },
     );
     await expect(service.probe('openai-compatible', 'http://127.0.0.1:1234')).resolves.toEqual([
-      { id: 'google/gemma-4-e4b', displayName: 'google/gemma-4-e4b' },
+      { id: 'google/gemma-4-e4b', displayName: 'Gemma 4 E4B' },
     ]);
     const requestedUrl = fetchMock.mock.calls[0]?.[0];
     expect(requestedUrl).toBeInstanceOf(URL);
-    expect(requestedUrl instanceof URL ? requestedUrl.href : '').toBe('http://127.0.0.1:1234/v1/models');
+    expect(requestedUrl instanceof URL ? requestedUrl.href : '').toBe('http://127.0.0.1:1234/api/v1/models');
     await service.configure('openai-compatible', 'http://127.0.0.1:1234', 'google/gemma-4-e4b');
     expect(await configStore.load()).toMatchObject({
       providerId: 'openai-compatible',
-      endpoint: 'http://127.0.0.1:1234/v1/',
+      endpoint: 'http://127.0.0.1:1234/api/v1/',
       model: 'google/gemma-4-e4b',
     });
     vault.close();
@@ -142,6 +138,8 @@ describe('desktop AI summary workflow', () => {
     const pending = await service.generate(transcript.path, preparation.sourceRevision, preparation.suggestedTemplate);
     expect(pending).toMatchObject({ riskLevel: 'L1', model: 'qwen3:8b', usage: { inputTokens: 100, outputTokens: 80 } });
     expect(pending.content).toContain('[00:01](assets/media/lesson.mp4#t=1.000)');
+    const workingDocument = await vault.read(`.oldfolio/cache/ai-inputs/${preparation.sourceRevision}.txt`);
+    expect(workingDocument.text).toContain('[segment-00001 00:00:01.000]');
     await expect(vault.read(pending.targetPath)).rejects.toBeInstanceOf(VaultNotFoundError);
 
     const applied = await service.apply(pending.id);

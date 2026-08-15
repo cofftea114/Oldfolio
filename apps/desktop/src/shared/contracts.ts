@@ -129,7 +129,8 @@ export interface AISummaryPreparation {
   segmentCount: number;
   sourceCharacters: number;
   estimatedInputTokens: number;
-  processingMode: 'direct' | 'hierarchical';
+  workingDocumentPath: string;
+  processingMode: 'direct' | 'document-reader';
   estimatedModelCalls: number;
   endpoint: string;
   model: string;

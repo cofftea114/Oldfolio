@@ -36,7 +36,8 @@ export function normalizeLocalAIEndpoint(providerId: LocalAIProviderId, value: s
   if (!isLoopback(candidate.hostname)) throw new Error('当前版本只允许连接本机 AI 服务。');
   const url = validateAIEndpoint(value.trim(), { allowLocalhostHttp: true });
   if (url.search) throw new Error('本地 AI 地址不能包含查询参数。');
-  if (url.pathname === '/') url.pathname = providerId === 'ollama' ? '/api/' : '/v1/';
+  if (providerId === 'openai-compatible' && /^\/v1\/?$/u.test(url.pathname)) url.pathname = '/api/v1/';
+  if (url.pathname === '/') url.pathname = providerId === 'ollama' ? '/api/' : '/api/v1/';
   if (!url.pathname.endsWith('/')) url.pathname = `${url.pathname}/`;
   return url.href;
 }

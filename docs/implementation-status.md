@@ -37,12 +37,13 @@ claim that the planned 9–12 month v1 is complete.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
-- Configure a loopback-only Ollama or LM Studio OpenAI-compatible endpoint and model in device-local
-  settings. Root URLs are normalized to `/api/` or `/v1/` according to the selected provider. For generated
+- Configure a loopback-only Ollama or LM Studio endpoint and model in device-local settings. Root URLs
+  are normalized to Ollama `/api/` or LM Studio native `/api/v1/`. For generated
   Transcript notes, automatically select a summary template, disclose the exact untrusted-data
-  payload, estimated input size, and direct/hierarchical processing plan. Long inputs within the
-  200,000-character safety limit are summarized in bounded sequential batches and pairwise merged,
-  with original evidence IDs validated at every level. Preview the complete OKF `Synthesis` content
+  payload, estimated input size, and direct/document-reader processing plan. A revision-bound plain-text
+  working document is stored in the non-synchronized cache. Long inputs within the 200,000-character
+  safety limit are read through bounded windows into one evolving global notebook rather than independent
+  summaries, with original evidence IDs validated at every step. Preview the complete OKF `Synthesis` content
   and diff, and apply or undo the resulting L1/L2 change set.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.

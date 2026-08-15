@@ -3,7 +3,7 @@ import { parse } from 'node:path';
 
 import {
   OllamaProvider,
-  OpenAICompatibleProvider,
+  LMStudioProvider,
   SUMMARY_TEMPLATES,
   createWikiChangeSet,
   generateTranscriptSummary,
@@ -40,7 +40,8 @@ export interface AISummaryPreparation {
   readonly segmentCount: number;
   readonly sourceCharacters: number;
   readonly estimatedInputTokens: number;
-  readonly processingMode: 'direct' | 'hierarchical';
+  readonly workingDocumentPath: string;
+  readonly processingMode: 'direct' | 'document-reader';
   readonly estimatedModelCalls: number;
   readonly endpoint: string;
   readonly model: string;
@@ -74,7 +75,7 @@ export type LocalAIProviderResolver = (providerId: LocalAIProviderId) => AIProvi
 function defaultProvider(providerId: LocalAIProviderId): AIProvider {
   return providerId === 'ollama'
     ? new OllamaProvider()
-    : new OpenAICompatibleProvider({ endpointPolicy: { allowLocalhostHttp: true } });
+    : new LMStudioProvider();
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -190,6 +191,7 @@ export class AISummaryService {
       segmentCount: prepared.evidence.length,
       sourceCharacters: prepared.sourceCharacters,
       estimatedInputTokens: prepared.estimatedInputTokens,
+      workingDocumentPath: prepared.workingDocumentPath,
       processingMode: prepared.processingMode,
       estimatedModelCalls: prepared.estimatedModelCalls,
       endpoint: config.endpoint,
@@ -197,7 +199,7 @@ export class AISummaryService {
       providerId: config.providerId,
       dataDestination: config.providerId === 'ollama' ? 'local_ollama' : 'local_lm_studio',
       estimatedCost: 0,
-      sourcePreview: prepared.sourcePayload,
+      sourcePreview: prepared.workingDocumentContent,
     };
   }
 
@@ -212,6 +214,7 @@ export class AISummaryService {
     if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
     const prepared = await this.readPrepared(sourcePath);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
+    await this.ensureWorkingDocument(prepared);
     const generated = await generateTranscriptSummary(this.provider(config.providerId), config, prepared, template, {
       resolveSecret: () => Promise.resolve(undefined),
       ...(signal ? { signal } : {}),
@@ -349,6 +352,17 @@ export class AISummaryService {
       resource: manifest.resource,
       segments: manifest.segments,
     });
+  }
+
+  private async ensureWorkingDocument(prepared: PreparedTranscriptSummary): Promise<void> {
+    const existing = await this.readOptional(prepared.workingDocumentPath);
+    if (existing) {
+      if (existing.text !== prepared.workingDocumentContent) {
+        throw new Error('AI 转录工作文件与当前来源修订不一致，请清理缓存后重试。');
+      }
+      return;
+    }
+    await this.repository.write(prepared.workingDocumentPath, prepared.workingDocumentContent, null);
   }
 
   private provider(providerId: LocalAIProviderId): AIProvider {

@@ -10,7 +10,7 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Lossless native Markdown vault and strict OKF v0.2 bundle validation.
 - Rebuildable local search and link graph.
 - Local Ollama/LM Studio transcript summaries with automatic template selection, timestamp evidence,
-  context-safe hierarchical reduction, reviewable revision-bound change sets, approval, and atomic undo.
+  a controlled transcript document reader, reviewable revision-bound change sets, approval, and atomic undo.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
 - Provider contracts for local/BYOK AI.
 - Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
@@ -67,18 +67,20 @@ burned-in subtitles require a future OCR pipeline.
 1. Start either Ollama or LM Studio on the same computer. In LM Studio, start the local server and
    make the chat model visible to the server.
 2. Open a Vault and select **AI workspace**. Choose **Ollama** or **LM Studio**. Defaults are
-   `http://127.0.0.1:11434/api/` for Ollama and `http://127.0.0.1:1234/v1/` for LM Studio; entering
+   `http://127.0.0.1:11434/api/` for Ollama and `http://127.0.0.1:1234/api/v1/` for LM Studio; entering
    only the loopback host and port is also accepted and normalized automatically.
 3. Select **Detect local models**, choose a chat model, and save the device configuration.
-4. Open an Oldfolio-generated Transcript and select **Prepare summary**. Review the exact JSON
-   payload, local destination, model, automatic template, estimated input size, and zero remote
-   service cost before sending it. If the transcript does not fit a typical 8K local-model context,
-   Oldfolio shows the estimated call count and summarizes it in bounded batches before merging the
-   results while preserving the original timestamp evidence IDs.
+4. Open an Oldfolio-generated Transcript and select **Prepare summary**. Review the exact plain-text
+   working document, local destination, model, automatic template, estimated input size, and zero remote
+   service cost before sending it. Oldfolio writes a revision-bound plain-text working document under
+   `.oldfolio/cache/ai-inputs/`. If it does not fit a typical local-model context, the model reads
+   bounded windows while maintaining one global set of notes, then produces the final synthesis with
+   original timestamp evidence IDs. It does not create independent summaries and mechanically merge them.
 5. Review the generated OKF `Synthesis` document and diff. Nothing is written until **Approve and
    write to Vault** is selected; the resulting write can be atomically undone while unchanged.
 
-This first UI intentionally accepts only loopback Ollama and LM Studio endpoints and stores only the
+This first UI intentionally accepts only loopback Ollama and LM Studio endpoints. LM Studio uses its
+native v1 chat API with reasoning disabled for schema-bound knowledge tasks. Oldfolio stores only the
 provider, endpoint, and model name in device-local application data. Remote OpenAI-compatible BYOK
 UI remains disabled until an OS credential-store implementation can guarantee that keys never enter
 the Vault or ordinary config.

@@ -151,7 +151,7 @@ const finishReason = (value: unknown): AICompletion['finishReason'] => {
 interface OpenAIResponse {
   readonly model?: unknown;
   readonly choices?: readonly {
-    readonly message?: { readonly content?: unknown };
+    readonly message?: { readonly content?: unknown; readonly reasoning_content?: unknown; readonly reasoning?: unknown };
     readonly finish_reason?: unknown;
   }[];
   readonly usage?: { readonly prompt_tokens?: unknown; readonly completion_tokens?: unknown };
@@ -208,7 +208,11 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
       context,
     )) as OpenAIResponse;
     const choice = response.choices?.[0];
-    if (typeof choice?.message?.content !== 'string') {
+    if (choice?.message?.content === '' && choice.finish_reason === 'length'
+      && (typeof choice.message.reasoning_content === 'string' || typeof choice.message.reasoning === 'string')) {
+      throw new AIProviderError('AI provider used the entire output limit for reasoning and returned no final answer.');
+    }
+    if (typeof choice?.message?.content !== 'string' || !choice.message.content.trim()) {
       throw new AIProviderError('AI provider response did not contain text content.');
     }
     return {
@@ -227,6 +231,129 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
                 : {}),
             },
           }),
+    };
+  }
+}
+
+interface LMStudioNativeResponse {
+  readonly model_instance_id?: unknown;
+  readonly output?: readonly { readonly type?: unknown; readonly content?: unknown }[];
+  readonly stats?: {
+    readonly input_tokens?: unknown;
+    readonly total_output_tokens?: unknown;
+    readonly reasoning_output_tokens?: unknown;
+  };
+}
+
+/**
+ * Uses LM Studio's native v1 API so reasoning can be disabled reliably for
+ * schema-bound knowledge maintenance. The persisted provider id remains
+ * openai-compatible for backward compatibility with existing device config.
+ */
+export class LMStudioProvider extends HttpAIProvider {
+  readonly id = 'openai-compatible';
+  readonly displayName = 'LM Studio';
+
+  constructor(options: ProviderOptions = {}) {
+    super({
+      ...options,
+      endpointPolicy: { allowLocalhostHttp: true, ...(options.endpointPolicy ?? {}) },
+    });
+  }
+
+  private nativeEndpoint(config: AIProviderConfig, path: string): URL {
+    const configured = this.endpoint(config);
+    return new URL(`/api/v1/${path}`, configured);
+  }
+
+  async listModels(config: AIProviderConfig, context?: AIInvocationContext): Promise<readonly AIModelDescriptor[]> {
+    const response = (await this.requestJson(
+      this.nativeEndpoint(config, 'models'),
+      { method: 'GET' },
+      config,
+      context,
+    )) as {
+      readonly models?: readonly {
+        readonly type?: unknown;
+        readonly key?: unknown;
+        readonly display_name?: unknown;
+      }[];
+    };
+    return (response.models ?? [])
+      .filter((item): item is { readonly type: 'llm'; readonly key: string; readonly display_name?: string } =>
+        item.type === 'llm' && typeof item.key === 'string')
+      .map((item) => ({
+        id: item.key,
+        displayName: typeof item.display_name === 'string' ? item.display_name : item.key,
+        capabilities: ['chat'],
+        local: true,
+      }));
+  }
+
+  async complete(
+    config: AIProviderConfig,
+    request: AICompletionRequest,
+    context?: AIInvocationContext,
+  ): Promise<AICompletion> {
+    const systemMessages = request.messages.filter((message) => message.role === 'system').map((message) => message.content);
+    const inputMessages = request.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => `${message.role.toUpperCase()}_MESSAGE\n${message.content}`)
+      .join('\n\n');
+    const formatInstruction = request.responseSchema === undefined
+      ? request.responseFormat === 'json'
+        ? 'Return only one valid JSON object, without Markdown fences or commentary.'
+        : ''
+      : `Return only one valid JSON object matching this JSON Schema, without Markdown fences or commentary:\n${JSON.stringify(request.responseSchema)}`;
+    const baseBody = {
+      model: request.model,
+      input: inputMessages,
+      system_prompt: [...systemMessages, formatInstruction].filter(Boolean).join('\n\n'),
+      store: false,
+      ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+      ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
+    };
+    const invoke = (reasoning: boolean) => this.requestJson(
+      this.nativeEndpoint(config, 'chat'),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...baseBody, ...(reasoning ? { reasoning: 'off' } : {}) }),
+      },
+      config,
+      context,
+    ) as Promise<LMStudioNativeResponse>;
+
+    let response: LMStudioNativeResponse;
+    try {
+      response = await invoke(true);
+    } catch (error: unknown) {
+      if (!(error instanceof AIProviderError) || error.status !== 400 || !/reasoning/iu.test(error.message)) throw error;
+      response = await invoke(false);
+    }
+    const content = response.output
+      ?.filter((item) => item.type === 'message' && typeof item.content === 'string')
+      .map((item) => item.content as string)
+      .join('\n')
+      .trim();
+    if (!content) {
+      const reasoningOnly = response.output?.some((item) => item.type === 'reasoning' && typeof item.content === 'string');
+      throw new AIProviderError(reasoningOnly
+        ? 'LM Studio returned reasoning but no final answer. Disable model thinking or increase its output limit.'
+        : 'LM Studio response did not contain text content.');
+    }
+    return {
+      content,
+      model: typeof response.model_instance_id === 'string' ? response.model_instance_id : request.model,
+      finishReason: 'stop',
+      ...(response.stats === undefined ? {} : {
+        usage: {
+          ...(typeof response.stats.input_tokens === 'number' ? { inputTokens: response.stats.input_tokens } : {}),
+          ...(typeof response.stats.total_output_tokens === 'number'
+            ? { outputTokens: response.stats.total_output_tokens }
+            : {}),
+        },
+      }),
     };
   }
 }
