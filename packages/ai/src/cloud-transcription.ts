@@ -203,7 +203,7 @@ export class TencentCloudASRProvider implements AIProvider {
   }
 
   listModels(config: AIProviderConfig): Promise<readonly AIModelDescriptor[]> {
-    return Promise.resolve(staticModels(config.model || '16k_zh_en_2.0', '腾讯云录音文件识别'));
+    return Promise.resolve(staticModels(config.model || '16k_zh', '腾讯云录音文件识别'));
   }
 
   complete(): Promise<AICompletion> {
@@ -218,7 +218,7 @@ export class TencentCloudASRProvider implements AIProvider {
       throw new AIProviderError('腾讯云本地音频数据必须大于 0 且不超过 5 MB。');
     }
     const createBody = JSON.stringify({
-      EngineModelType: config.model || '16k_zh_en_2.0',
+      EngineModelType: config.model || '16k_zh',
       ChannelNum: 1,
       ResTextFormat: 1,
       SourceType: 1,

@@ -38,9 +38,11 @@ import type {
   OnlineSummaryPreset,
   SearchHit,
   TranscriptPlaybackSummary,
+  TencentASREngineModel,
   VaultDocument,
   VaultSummary,
 } from '../../shared/contracts';
+import { DEFAULT_TENCENT_ASR_ENGINE, TENCENT_ASR_ENGINES, isTencentASREngine } from '../../shared/contracts';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MarkdownReader } from './MarkdownReader';
 import { TranscriptPlayer } from './TranscriptPlayer';
@@ -145,7 +147,7 @@ export function App() {
   const [cloudTranscriptionSettings, setCloudTranscriptionSettings] = useState<CloudTranscriptionSettingsSummary | null>(null);
   const [cloudTranscriptionProvider, setCloudTranscriptionProvider] = useState<CloudTranscriptionProviderId>('openai-compatible');
   const [tencentRegion, setTencentRegion] = useState('ap-guangzhou');
-  const [tencentEngine, setTencentEngine] = useState('16k_zh_en');
+  const [tencentEngine, setTencentEngine] = useState<TencentASREngineModel>(DEFAULT_TENCENT_ASR_ENGINE);
   const [tencentSecretId, setTencentSecretId] = useState('');
   const [tencentSecretKey, setTencentSecretKey] = useState('');
   const [onlineMediaUrl, setOnlineMediaUrl] = useState('');
@@ -302,7 +304,7 @@ export function App() {
       if (cloudSettings.providerId === 'openai-compatible') setOnlineTranscriptionModel(cloudSettings.model);
       if (cloudSettings.providerId === 'tencent-asr') {
         setTencentRegion(cloudSettings.region || 'ap-guangzhou');
-        setTencentEngine(cloudSettings.model || '16k_zh_en');
+        setTencentEngine(isTencentASREngine(cloudSettings.model) ? cloudSettings.model : DEFAULT_TENCENT_ASR_ENGINE);
       }
       setOnlineHostConfirmed(false);
       setMediaSettings(currentMediaSettings);
@@ -737,6 +739,26 @@ export function App() {
     }
   };
 
+  const deleteMediaJob = async (jobId: string) => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      const result = await window.oldfolio.deleteMediaJob(jobId);
+      if (result.cancelled) {
+        setStatus('已取消删除任务');
+        return;
+      }
+      await refreshMedia();
+      setStatus('失败的转录任务及其中间缓存已删除');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '删除转录任务失败');
+      setStatus('删除转录任务失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   useEffect(() => {
     const timeout = window.setTimeout(async () => {
       if (!active || draft === active.content) return;
@@ -778,6 +800,7 @@ export function App() {
   const savedCloudCredentialsAvailable = cloudTranscriptionSettings?.providerId === cloudTranscriptionProvider
     && cloudTranscriptionSettings.credentialAvailable;
   const tencentCredentialCount = [tencentSecretId, tencentSecretKey].filter((value) => value.trim()).length;
+  const selectedTencentEngine = TENCENT_ASR_ENGINES.find((engine) => engine.id === tencentEngine);
   const onlineMediaIsPlatform = isPlatformShareUrl(onlineMediaUrl);
 
   const openWikiLink = (target: string) => {
@@ -944,7 +967,25 @@ export function App() {
               </>}
               {cloudTranscriptionProvider === 'tencent-asr' && <>
                 <label className="field-label">地域<input value={tencentRegion} onChange={(event) => setTencentRegion(event.target.value)} placeholder="ap-guangzhou" /></label>
-                <label className="field-label">引擎模型<input value={tencentEngine} onChange={(event) => setTencentEngine(event.target.value)} placeholder="16k_zh_en" /></label>
+                <label className="field-label">引擎模型
+                  <select value={tencentEngine} onChange={(event) => setTencentEngine(event.target.value as TencentASREngineModel)}>
+                    <optgroup label="基础版 · 免费资源包适用">
+                      {TENCENT_ASR_ENGINES.filter((engine) => engine.billing === 'free-package').map((engine) => (
+                        <option key={engine.id} value={engine.id}>{engine.label} · {engine.id}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="大模型版 · 需要付费资源包或后付费">
+                      {TENCENT_ASR_ENGINES.filter((engine) => engine.billing === 'paid').map((engine) => (
+                        <option key={engine.id} value={engine.id}>{engine.label} · {engine.id}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </label>
+                <small className="model-help-note">
+                  {selectedTencentEngine?.billing === 'paid'
+                    ? '当前选择大模型付费引擎，不消耗基础版每月 10 小时免费包。'
+                    : '当前选择基础版引擎，可使用录音文件识别每月 10 小时免费包。'}
+                </small>
                 <label className="field-label">SecretId<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretId'} value={tencentSecretId} onChange={(event) => setTencentSecretId(event.target.value)} /></label>
                 <label className="field-label">SecretKey<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretKey'} type="password" value={tencentSecretKey} onChange={(event) => setTencentSecretKey(event.target.value)} /></label>
                 {savedCloudCredentialsAvailable && <small className="model-help-note">凭据已安全保留在当前会话，留空再保存不会清除。</small>}
@@ -977,6 +1018,7 @@ export function App() {
                 <small>{job.chunkCount ? `${job.completedChunks}/${job.chunkCount} 分块` : `第 ${job.attempts} 次运行`}</small>
                 {job.error && <small>{job.error}</small>}
                 {job.canRetry && <button disabled={importing} onClick={() => void retryMediaJob(job.id)}>继续</button>}
+                {job.canDelete && <button disabled={importing} onClick={() => void deleteMediaJob(job.id)}>删除任务</button>}
               </div>
             ))}
             {importError && <p className="media-error" role="alert">{importError}</p>}

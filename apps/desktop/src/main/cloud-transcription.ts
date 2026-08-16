@@ -6,6 +6,7 @@ import { TencentCloudASRProvider } from '@oldfolio/ai';
 import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfolio/domain';
 
 import type { OnlineAIService, OnlineMediaReader, SessionSecretStore } from './online-ai.js';
+import { DEFAULT_TENCENT_ASR_ENGINE, isTencentASREngine } from '../shared/contracts.js';
 
 export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
 
@@ -73,7 +74,9 @@ function parseConfig(source: string): CloudTranscriptionConfig {
   ) throw new Error('云转录设备配置无效。');
   const expectedRef = value.providerId === 'tencent-asr' ? TENCENT_SECRET_REF : 'session:online-openai-compatible';
   if (value.secretRef !== expectedRef) throw new Error('云转录密钥引用无效。');
-  const config = { version: 1, providerId: value.providerId, model: bounded(value.model, '云转录模型'), region: value.region.trim(), secretRef: expectedRef } as const;
+  const model = bounded(value.model, '云转录模型');
+  if (value.providerId === 'tencent-asr' && !isTencentASREngine(model)) throw new Error('腾讯云引擎模型无效。');
+  const config = { version: 1, providerId: value.providerId, model, region: value.region.trim(), secretRef: expectedRef } as const;
   endpoint(config);
   return config;
 }
@@ -84,8 +87,16 @@ export class CloudTranscriptionConfigStore {
   async load(): Promise<CloudTranscriptionConfig> {
     try {
       const source = await readFile(this.filePath, 'utf8');
-      const persisted = JSON.parse(source) as { readonly providerId?: unknown };
-      if (persisted.providerId === 'aliyun-tingwu') return this.save(DEFAULT_CONFIG);
+      const persisted: unknown = JSON.parse(source);
+      const record = typeof persisted === 'object' && persisted !== null ? persisted as Record<string, unknown> : null;
+      if (record?.['providerId'] === 'aliyun-tingwu') return this.save(DEFAULT_CONFIG);
+      if (
+        record?.['providerId'] === 'tencent-asr'
+        && typeof record['model'] === 'string'
+        && !isTencentASREngine(record['model'])
+      ) {
+        return this.save(parseConfig(JSON.stringify({ ...record, model: DEFAULT_TENCENT_ASR_ENGINE })));
+      }
       return parseConfig(source);
     } catch (error: unknown) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return DEFAULT_CONFIG;

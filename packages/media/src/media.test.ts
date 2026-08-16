@@ -150,6 +150,21 @@ describe('persistent media jobs', () => {
     expect(recovered.request).toMatchObject({ modelId: 'tiny', modelHash: sha256('model'), chunkDurationMs: 900_000 });
     expect(recovered.checkpoints.at(-1)).toMatchObject({ chunkIndex: 1, chunkCount: 4 });
   });
+
+  it('deletes only failed jobs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-media-job-delete-'));
+    roots.push(root);
+    const store = new MediaJobStore(root);
+    await store.initialize();
+    const failed = await store.create({ sourceUri: 'assets/media/failed.mp4', sourceHash: sha256('failed') });
+    const queued = await store.create({ sourceUri: 'assets/media/queued.mp4', sourceHash: sha256('queued') });
+    await store.fail(failed.id, { code: 'test_failure', message: 'failed', retryable: true });
+
+    await expect(store.deleteFailed(failed.id)).resolves.toMatchObject({ id: failed.id, stage: 'failed' });
+    await expect(store.get(failed.id)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.deleteFailed(queued.id)).rejects.toThrow(/failed/u);
+    await expect(store.get(queued.id)).resolves.toMatchObject({ id: queued.id, stage: 'queued' });
+  });
 });
 
 describe('local media tool boundary', () => {

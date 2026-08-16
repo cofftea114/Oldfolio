@@ -36,6 +36,7 @@ import type {
   VaultDocument,
   VaultSummary,
 } from '../shared/contracts';
+import { isTencentASREngine } from '../shared/contracts';
 
 let mainWindow: BrowserWindow | null = null;
 let repository: VaultRepository | null = null;
@@ -606,9 +607,35 @@ function registerIpc(): void {
       completedChunks,
       ...(chunkCount !== undefined ? { chunkCount } : {}),
       canRetry: Boolean(job.request) && (job.stage === 'queued' || (job.stage === 'failed' && job.error?.retryable)),
+      canDelete: job.stage === 'failed',
       ...(job.error ? { error: job.error.message } : {}),
       };
     });
+  });
+  ipcMain.handle('media:delete-job', async (event, jobId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof jobId !== 'string') throw new TypeError('Invalid media job id');
+    const jobs = requireMediaJobs();
+    const job = await jobs.get(jobId);
+    if (job.stage !== 'failed') throw new Error('只能删除失败的转录任务。');
+    const confirmation = await dialog.showMessageBox(mainWindow!, {
+      type: 'warning',
+      title: '删除失败的转录任务',
+      message: '确定删除这条失败任务吗？',
+      detail: '将删除任务记录和中间缓存，但不会删除原始音视频、来源笔记或转录笔记。',
+      buttons: ['删除任务', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirmation.response !== 0) return { cancelled: true };
+    const cacheRoot = resolve(requireRepository().root, '.oldfolio', 'cache', 'media-work');
+    const cachePath = resolve(cacheRoot, job.id);
+    const cacheChild = relative(cacheRoot, cachePath);
+    if (!cacheChild || cacheChild.startsWith('..') || isAbsolute(cacheChild)) throw new Error('任务缓存路径越出了 Vault。');
+    await rm(cachePath, { recursive: true, force: true });
+    await jobs.deleteFailed(job.id);
+    return { cancelled: false };
   });
   ipcMain.handle('media:retry-job', async (event, jobId: unknown) => {
     assertTrustedSender(event);
@@ -739,7 +766,8 @@ function registerIpc(): void {
     }
     if (
       value.providerId === 'tencent-asr' && typeof value.region === 'string'
-      && typeof value.engineModelType === 'string' && typeof value.secretId === 'string' && typeof value.secretKey === 'string'
+      && typeof value.engineModelType === 'string' && isTencentASREngine(value.engineModelType)
+      && typeof value.secretId === 'string' && typeof value.secretKey === 'string'
     ) return requireCloudTranscription().configure({
       providerId: value.providerId, region: value.region, engineModelType: value.engineModelType,
       secretId: value.secretId, secretKey: value.secretKey,

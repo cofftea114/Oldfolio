@@ -31,12 +31,12 @@ describe('cloud transcription device boundary', () => {
     );
 
     const configured = await service.configure({
-      providerId: 'tencent-asr', region: 'ap-guangzhou', engineModelType: '16k_zh_en',
+      providerId: 'tencent-asr', region: 'ap-guangzhou', engineModelType: '16k_zh',
       secretId: 'secret-id', secretKey: 'secret-key',
     });
 
     expect(configured).toMatchObject({
-      providerId: 'tencent-asr', model: '16k_zh_en', credentialAvailable: true,
+      providerId: 'tencent-asr', model: '16k_zh', credentialAvailable: true,
       endpointHost: 'asr.tencentcloudapi.com', inputMode: 'chunks',
     });
     const persisted = await readFile(configPath, 'utf8');
@@ -48,6 +48,11 @@ describe('cloud transcription device boundary', () => {
       providerId: 'tencent-asr', region: 'ap-shanghai', engineModelType: '16k_zh',
       secretId: '', secretKey: '',
     })).resolves.toMatchObject({ model: '16k_zh', credentialAvailable: true });
+
+    await expect(service.configure({
+      providerId: 'tencent-asr', region: 'ap-shanghai', engineModelType: 'unknown-engine',
+      secretId: '', secretKey: '',
+    })).rejects.toThrow(/引擎模型/u);
   });
 
   it('migrates a removed Tingwu configuration to the default provider', async () => {
@@ -71,5 +76,22 @@ describe('cloud transcription device boundary', () => {
       secretRef: 'session:online-openai-compatible',
     });
     await expect(readFile(configPath, 'utf8')).resolves.not.toContain('aliyun-tingwu');
+  });
+
+  it('migrates an unsupported saved Tencent engine to the free-package default', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-cloud-transcription-engine-'));
+    roots.push(root);
+    const configPath = join(root, 'cloud-transcription.json');
+    await writeFile(configPath, JSON.stringify({
+      version: 1,
+      providerId: 'tencent-asr',
+      model: 'retired-engine',
+      region: 'ap-guangzhou',
+      secretRef: 'session:tencent-asr',
+    }));
+
+    const store = new CloudTranscriptionConfigStore(configPath);
+    await expect(store.load()).resolves.toMatchObject({ providerId: 'tencent-asr', model: '16k_zh' });
+    await expect(readFile(configPath, 'utf8')).resolves.toContain('"model": "16k_zh"');
   });
 });

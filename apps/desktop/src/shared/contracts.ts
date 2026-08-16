@@ -80,6 +80,7 @@ export interface MediaJobSummary {
   updatedAt: string;
   error?: string;
   canRetry: boolean;
+  canDelete: boolean;
   attempts: number;
   completedChunks: number;
   chunkCount?: number;
@@ -142,6 +143,24 @@ export interface OnlineAISettingsSummary {
 
 export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
 export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
+
+export const DEFAULT_TENCENT_ASR_ENGINE = '16k_zh' as const;
+export const TENCENT_ASR_ENGINES = [
+  { id: '16k_zh', label: '中文普通话通用（推荐）', billing: 'free-package' },
+  { id: '16k_zh-PY', label: '中文、英语、粤语混合', billing: 'free-package' },
+  { id: '16k_en', label: '英语', billing: 'free-package' },
+  { id: '16k_yue', label: '粤语', billing: 'free-package' },
+  { id: '16k_ja', label: '日语', billing: 'free-package' },
+  { id: '16k_ko', label: '韩语', billing: 'free-package' },
+  { id: '16k_zh_en', label: '中英及多方言 · 大模型 1.0', billing: 'paid' },
+  { id: '16k_zh_en_2.0', label: '中英及多方言 · 大模型 2.0', billing: 'paid' },
+  { id: '16k_multi_lang', label: '多语种 · 大模型 1.0', billing: 'paid' },
+] as const;
+export type TencentASREngineModel = typeof TENCENT_ASR_ENGINES[number]['id'];
+
+export function isTencentASREngine(value: string): value is TencentASREngineModel {
+  return TENCENT_ASR_ENGINES.some((engine) => engine.id === value);
+}
 
 export interface CloudTranscriptionSettingsSummary {
   version: 1;
@@ -235,6 +254,7 @@ export interface OldfolioDesktopApi {
   transcribeCloudMedia(input: { language?: string }): Promise<MediaTranscriptionResult>;
   transcribeOnlineMedia(input: { url: string; language?: string; platformAccessConfirmed?: boolean }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
+  deleteMediaJob(jobId: string): Promise<{ cancelled: boolean }>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
   getAISettings(): Promise<AISettingsSummary>;
@@ -261,7 +281,7 @@ export interface OldfolioDesktopApi {
   }): Promise<OnlineAISettingsSummary>;
   saveCloudTranscriptionSettings(input:
     | { providerId: 'openai-compatible'; model: string }
-    | { providerId: 'tencent-asr'; region: string; engineModelType: string; secretId: string; secretKey: string }
+    | { providerId: 'tencent-asr'; region: string; engineModelType: TencentASREngineModel; secretId: string; secretKey: string }
   ): Promise<CloudTranscriptionSettingsSummary>;
   prepareAISummary(path: string, executionTarget: AISummaryExecutionTarget): Promise<AISummaryPreparation>;
   generateAISummary(input: {

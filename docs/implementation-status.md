@@ -20,7 +20,8 @@ claim that the planned 9–12 month v1 is complete.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.
 - Persist media job requests and SHA-256-verified chunk checkpoints under the non-synchronized
-  cache, requeue interrupted work at startup, and expose retry controls for queued/failed jobs.
+  cache, requeue interrupted work at startup, expose retry controls for queued/failed jobs, and allow
+  confirmed deletion of failed job metadata and intermediate cache without deleting Vault assets or notes.
 - Configure FFmpeg (including the adjacent `ffprobe`) and `whisper-cli` per device, import
   user-approved GGML models with streaming
   SHA-256 verification, copy selected media into content-addressed Vault assets, and run the local
@@ -63,7 +64,8 @@ claim that the planned 9–12 month v1 is complete.
 - Configure transcription and summary independently for local or online execution. Online summaries
   provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
   Gemini. Online transcription supports OpenAI-compatible audio models and Tencent Cloud
-  recording-file recognition with signed asynchronous polling.
+  recording-file recognition with signed asynchronous polling. Tencent defaults to the free-package-eligible
+  `16k_zh` engine and separates base and paid large-model engines in a validated selector.
   The user must explicitly confirm the summary destination host and can inspect the complete summary
   working document before it is sent. Only endpoints, provider/model settings, and opaque secret references are serialized.
   The current API Key implementation is deliberately session-only main-process memory: it is cleared

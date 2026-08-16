@@ -45,7 +45,7 @@ describe('cloud transcription providers', () => {
       now: () => NOW, sleep: () => Promise.resolve(), maxPolls: 3,
     });
     const config: AIProviderConfig = {
-      providerId: 'tencent-asr', endpoint: 'https://asr.tencentcloudapi.com/', model: '16k_zh_en', secretRef: 'session:tencent',
+      providerId: 'tencent-asr', endpoint: 'https://asr.tencentcloudapi.com/', model: '', secretRef: 'session:tencent',
     };
     const context: AIInvocationContext = {
       resolveSecret: () => Promise.resolve(JSON.stringify({ secretId: 'secret-id', secretKey: 'secret-key', region: 'ap-guangzhou' })),
@@ -61,7 +61,7 @@ describe('cloud transcription providers', () => {
     const requestHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(requestHeaders.has('Host')).toBe(false);
     const createBody = JSON.parse(requestBody(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-    expect(createBody).toMatchObject({ SourceType: 1, DataLen: 3, EngineModelType: '16k_zh_en' });
+    expect(createBody).toMatchObject({ SourceType: 1, DataLen: 3, EngineModelType: '16k_zh' });
   });
 
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   AITranscriptSegment,
@@ -117,6 +117,13 @@ export class MediaJobStore {
     const updated: MediaJobRecord = { ...current, stage: 'failed', updatedAt, error };
     await this.save(updated);
     return updated;
+  }
+
+  async deleteFailed(id: string): Promise<MediaJobRecord> {
+    const current = await this.get(id);
+    if (current.stage !== 'failed') throw new Error('Only failed media jobs can be deleted.');
+    await rm(join(this.#directory, `${current.id}.json`));
+    return current;
   }
 
   private parse(source: string): MediaJobRecord {

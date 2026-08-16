@@ -24,6 +24,7 @@ const api: OldfolioDesktopApi = {
   transcribeCloudMedia: (input) => ipcRenderer.invoke('media:transcribe-cloud-file', input),
   transcribeOnlineMedia: (input) => ipcRenderer.invoke('media:transcribe-online', input),
   retryMediaJob: (jobId) => ipcRenderer.invoke('media:retry-job', jobId),
+  deleteMediaJob: (jobId) => ipcRenderer.invoke('media:delete-job', jobId),
   listMediaJobs: () => ipcRenderer.invoke('media:list-jobs'),
   getTranscriptPlayback: (path) => ipcRenderer.invoke('media:get-playback', path),
   getAISettings: () => ipcRenderer.invoke('ai:get-settings'),

@@ -101,7 +101,8 @@ it is never written to the Vault, SQLite index, device config, or logs.
    the configured local model. Alternatively, choose OpenAI-compatible transcription or Tencent Cloud
    recording-file recognition. OpenAI-compatible transcription reuses the explicitly confirmed online
    endpoint/key but has its own model selection. Tencent receives local 64-kbps AAC chunks kept below
-   its raw-data request limit.
+   its raw-data request limit. Tencent defaults to the `16k_zh` base engine, which is eligible for the
+   monthly recording-file free package; paid large-model engines are explicitly labeled in the selector.
 3. Paste a public direct HTTPS media URL or a YouTube, bilibili, or Douyin video share link under
    **Online video**. Authenticated/private content, browser Cookie extraction, playlists, private-network
    targets, and embedded URL credentials remain unsupported.
