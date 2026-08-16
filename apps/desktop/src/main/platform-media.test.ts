@@ -27,7 +27,7 @@ describe('platform share media boundary', () => {
     const run = vi.fn<ProcessRunner>(async (request) => {
       const mediaPath = join(request.cwd ?? root, 'abc123.m4a');
       await writeFile(mediaPath, 'audio bytes');
-      return { exitCode: 0, stdout: `${mediaPath}\n`, stderr: '' };
+      return { exitCode: 0, stdout: 'E:\\old\\.oldfolio\\cache\\platform-media\\乱码标题.m4a\n', stderr: '' };
     });
 
     const result = await downloadPlatformMedia('https://www.youtube.com/watch?v=abc123', {
@@ -47,6 +47,10 @@ describe('platform share media boundary', () => {
     expect(request?.args).toContain('--no-cache-dir');
     expect(request?.args).toContain('--no-playlist');
     expect(request?.args.at(-1)).toBe('https://www.youtube.com/watch?v=abc123');
+    const outputIndex = request?.args.indexOf('--output') ?? -1;
+    const outputTemplate = outputIndex >= 0 ? request?.args[outputIndex + 1] : undefined;
+    expect(outputTemplate).toContain('%(id)s');
+    expect(outputTemplate).not.toContain('%(title)');
   });
 
   it('requires an explicit authorization confirmation', async () => {

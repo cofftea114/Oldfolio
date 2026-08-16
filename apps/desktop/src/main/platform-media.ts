@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { validateSourceUrl } from '@oldfolio/ingest';
@@ -58,9 +58,12 @@ export async function downloadPlatformMedia(
   const temporaryDirectory = await mkdtemp(join(input.cacheRoot, 'platform-'));
   let completed = false;
   try {
-    const outputTemplate = join(temporaryDirectory, '%(title).150B [%(id)s].%(ext)s');
+    // Platform titles can contain characters emitted with the Windows console code page.
+    // Keep the temporary filename ASCII-only and discover it through the filesystem instead
+    // of trusting a path decoded from yt-dlp stdout.
+    const outputTemplate = join(temporaryDirectory, '%(id)s.%(ext)s');
     const runner = options.run ?? runControlledProcess;
-    const result = await runner({
+    await runner({
       executablePath: input.ytDlpPath,
       args: [
         '--no-config',
@@ -74,7 +77,6 @@ export async function downloadPlatformMedia(
         '--format', 'bestaudio/best',
         '--ffmpeg-location', dirname(input.ffmpegPath),
         '--output', outputTemplate,
-        '--print', 'after_move:filepath',
         '--', detected.url.href,
       ],
       cwd: temporaryDirectory,
@@ -82,9 +84,10 @@ export async function downloadPlatformMedia(
       maxOutputBytes: 1024 * 1024,
       ...(options.signal ? { signal: options.signal } : {}),
     });
-    const printed = result.stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1);
-    if (!printed) throw new Error('平台解析器没有返回媒体文件。');
-    const candidate = resolve(temporaryDirectory, printed);
+    const entries = await readdir(temporaryDirectory, { withFileTypes: true });
+    const mediaFiles = entries.filter((entry) => entry.isFile() && MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase()));
+    if (mediaFiles.length !== 1) throw new Error('平台解析器没有生成唯一的媒体文件。');
+    const candidate = resolve(temporaryDirectory, mediaFiles[0]!.name);
     const child = relative(temporaryDirectory, candidate);
     if (!child || child.startsWith('..') || isAbsolute(child)) throw new Error('平台解析器返回了不受控的文件路径。');
     const [rootPath, mediaPath] = await Promise.all([realpath(temporaryDirectory), realpath(candidate)]);
