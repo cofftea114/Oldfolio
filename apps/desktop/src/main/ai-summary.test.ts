@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AIProvider } from '@oldfolio/domain';
-import { LMStudioProvider } from '@oldfolio/ai';
 import { compileTranscriptDocument } from '@oldfolio/media';
 import { parseOkfDocument } from '@oldfolio/okf';
 import { VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
@@ -15,7 +14,7 @@ import {
   normalizeLocalAIEndpoint,
   normalizeLocalOllamaEndpoint,
 } from './ai-device-config.js';
-import { AISummaryService } from './ai-summary.js';
+import { AISummaryService, createLocalAIProviderResolver } from './ai-summary.js';
 
 const roots: string[] = [];
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -57,7 +56,7 @@ describe('desktop AI summary workflow', () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
       models: [{ type: 'llm', key: 'google/gemma-4-e4b', display_name: 'Gemma 4 E4B' }],
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
-    const lmStudio = new LMStudioProvider({ fetch: fetchMock });
+    const lmStudio = createLocalAIProviderResolver(fetchMock)('openai-compatible');
     const configStore = new AIDeviceConfigStore(join(root, 'ai.json'));
     const service = new AISummaryService(
       vault,

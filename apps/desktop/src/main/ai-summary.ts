@@ -78,6 +78,12 @@ function defaultProvider(providerId: LocalAIProviderId): AIProvider {
     : new LMStudioProvider();
 }
 
+export function createLocalAIProviderResolver(fetchImplementation: typeof fetch): LocalAIProviderResolver {
+  return (providerId) => providerId === 'ollama'
+    ? new OllamaProvider({ fetch: fetchImplementation })
+    : new LMStudioProvider({ fetch: fetchImplementation });
+}
+
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 const summaryTemplateLabels: Readonly<Record<SummaryTemplate, string>> = {

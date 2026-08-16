@@ -29,10 +29,35 @@ export class AIProviderError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly code?: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'AIProviderError';
   }
+}
+
+function transportErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const direct = (error as { readonly code?: unknown }).code;
+  if (typeof direct === 'string' && direct) return direct;
+  const cause = (error as { readonly cause?: unknown }).cause;
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  const nested = (cause as { readonly code?: unknown }).code;
+  return typeof nested === 'string' && nested ? nested : undefined;
+}
+
+function isLocalEndpoint(url: URL): boolean {
+  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+}
+
+function transportErrorMessage(url: URL, code: string | undefined, aborted: boolean): string {
+  if (aborted) return 'AI 请求已取消。';
+  const suffix = code ? `（${code}）` : '';
+  if (isLocalEndpoint(url)) {
+    return `无法完成本地 AI 请求：与 ${url.origin} 的连接中断${suffix}。请确认 LM Studio 或 Ollama 仍在运行，然后重试。`;
+  }
+  return `AI 服务请求失败：无法连接 ${url.origin}${suffix}。请检查服务地址与网络后重试。`;
 }
 
 function safeProviderErrorMessage(value: unknown): string | undefined {
@@ -112,12 +137,26 @@ abstract class HttpAIProvider implements AIProvider {
       if (!secret) throw new AIProviderError(`No secret is available for keychain reference "${config.secretRef}".`);
       headers.set('authorization', `Bearer ${secret}`);
     }
-    const response = await (this.options.fetch ?? globalThis.fetch)(url, {
-      ...init,
-      headers,
-      redirect: 'manual',
-      ...(context?.signal === undefined ? {} : { signal: context.signal }),
-    });
+    let response: Response;
+    try {
+      response = await (this.options.fetch ?? globalThis.fetch)(url, {
+        ...init,
+        headers,
+        redirect: 'manual',
+        ...(context?.signal === undefined ? {} : { signal: context.signal }),
+      });
+    } catch (error: unknown) {
+      if (error instanceof AIProviderError) throw error;
+      const code = transportErrorCode(error);
+      const aborted = context?.signal?.aborted === true
+        || (error instanceof Error && error.name === 'AbortError');
+      throw new AIProviderError(
+        transportErrorMessage(url, code, aborted),
+        undefined,
+        code,
+        { cause: error },
+      );
+    }
     if (response.status >= 300 && response.status < 400) {
       throw new AIProviderError('AI endpoint redirects are disabled to prevent credential disclosure.', response.status);
     }

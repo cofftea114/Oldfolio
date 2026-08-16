@@ -1,5 +1,5 @@
 import { join, parse } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, protocol, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
@@ -12,7 +12,7 @@ import {
 import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import { SUMMARY_TEMPLATES } from '@oldfolio/ai';
 import { AIDeviceConfigStore } from './ai-device-config.js';
-import { AISummaryService } from './ai-summary.js';
+import { AISummaryService, createLocalAIProviderResolver } from './ai-summary.js';
 import { importCaptionFile } from './caption-import.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
@@ -36,6 +36,14 @@ const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
+// LM Studio's non-streaming endpoint may not return response headers until a long
+// generation completes. Chromium's network stack avoids Node fetch/Undici's
+// five-minute response-header timeout while preserving the same narrow fetch API.
+const chromiumNetworkFetch: typeof fetch = (input, init) => net.fetch(
+  input instanceof URL ? input.href : input,
+  init,
+);
+const localAIProvider = createLocalAIProviderResolver(chromiumNetworkFetch);
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'oldfolio-media', privileges: { standard: true, secure: true, stream: true } },
@@ -121,7 +129,7 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
   mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
-  aiSummary = new AISummaryService(repository, requireAIDeviceConfig());
+  aiSummary = new AISummaryService(repository, requireAIDeviceConfig(), localAIProvider);
   await mediaJobs.initialize();
   await repository.rebuildIndex();
   const documents = await repository.scanDocuments();

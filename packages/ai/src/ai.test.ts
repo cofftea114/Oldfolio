@@ -66,6 +66,24 @@ describe('AI security boundaries', () => {
     await expect(completion).rejects.not.toThrow(/must-not-be-echoed/u);
   });
 
+  it('turns a transport timeout into an actionable local-provider error', async () => {
+    const cause = Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' });
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(
+      new TypeError('fetch failed', { cause }),
+    );
+    const provider = new LMStudioProvider({ fetch: fetchMock });
+
+    const completion = provider.complete({
+      providerId: 'openai-compatible', endpoint: 'http://127.0.0.1:1234', model: 'test',
+    }, { model: 'test', messages: [{ role: 'user', content: 'hello' }] });
+
+    await expect(completion).rejects.toMatchObject({
+      name: 'AIProviderError',
+      code: 'UND_ERR_HEADERS_TIMEOUT',
+    });
+    await expect(completion).rejects.toThrow(/本地 AI 请求.*127\.0\.0\.1:1234.*连接中断/u);
+  });
+
   it('uses the LM Studio native API with reasoning disabled for structured local output', async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({
