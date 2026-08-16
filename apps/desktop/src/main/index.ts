@@ -14,6 +14,7 @@ import { SUMMARY_TEMPLATES } from '@oldfolio/ai';
 import { AIDeviceConfigStore } from './ai-device-config.js';
 import { AISummaryService } from './ai-summary.js';
 import { importCaptionFile } from './caption-import.js';
+import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
 import type {
@@ -93,6 +94,7 @@ async function summarizeDocument(path: string): Promise<DocumentSummary> {
   return {
     path: snapshot.path,
     title: metadata.title ?? parse(snapshot.path).name,
+    category: classifyDocumentPath(snapshot.path),
     revision: snapshot.revision,
     updatedAt: snapshot.modifiedAt.toISOString(),
     tags: metadata.tags,
@@ -105,6 +107,7 @@ async function readDocument(path: string): Promise<VaultDocument> {
   return {
     path: snapshot.path,
     title: metadata.title ?? parse(snapshot.path).name,
+    category: classifyDocumentPath(snapshot.path),
     revision: snapshot.revision,
     updatedAt: snapshot.modifiedAt.toISOString(),
     tags: metadata.tags,
@@ -158,7 +161,8 @@ function registerIpc(): void {
   ipcMain.handle('vault:list', async (event) => {
     assertTrustedSender(event);
     const documents = await requireRepository().scanDocuments();
-    return Promise.all(documents.map((document) => summarizeDocument(document.path)));
+    const summaries = await Promise.all(documents.map((document) => summarizeDocument(document.path)));
+    return summaries.filter((document) => document.category !== 'internal');
   });
   ipcMain.handle('vault:read', async (event, path: unknown) => {
     assertTrustedSender(event);
@@ -184,13 +188,20 @@ function registerIpc(): void {
   ipcMain.handle('vault:search', async (event, query: unknown): Promise<SearchHit[]> => {
     assertTrustedSender(event);
     if (typeof query !== 'string') throw new TypeError('Invalid search query');
-    return requireRepository().search(query);
+    const presented: SearchHit[] = [];
+    for (const result of await requireRepository().search(query)) {
+      const category = classifyDocumentPath(result.path);
+      if (category === 'internal') continue;
+      presented.push({ path: result.path, title: result.title, excerpt: result.excerpt, score: result.score, category });
+    }
+    return presented;
   });
   ipcMain.handle('vault:backlinks', async (event, path: unknown) => {
     assertTrustedSender(event);
     if (typeof path !== 'string') throw new TypeError('Invalid document path');
     const links = await requireRepository().backlinks(path);
-    return Promise.all(links.map((link) => summarizeDocument(link.sourcePath)));
+    const summaries = await Promise.all(links.map((link) => summarizeDocument(link.sourcePath)));
+    return summaries.filter((document) => document.category !== 'internal');
   });
   ipcMain.handle('source:import-feed', async (event, url: unknown) => {
     assertTrustedSender(event);

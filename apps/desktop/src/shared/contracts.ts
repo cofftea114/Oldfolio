@@ -4,9 +4,12 @@ export interface VaultSummary {
   documentCount: number;
 }
 
+export type DocumentCategory = 'knowledge' | 'transcript' | 'internal';
+
 export interface DocumentSummary {
   path: string;
   title: string;
+  category: DocumentCategory;
   revision: string;
   updatedAt: string;
   tags: string[];
@@ -20,6 +23,7 @@ export interface VaultDocument extends DocumentSummary {
 export interface SearchHit {
   path: string;
   title: string;
+  category: Exclude<DocumentCategory, 'internal'>;
   excerpt: string;
   score: number;
 }

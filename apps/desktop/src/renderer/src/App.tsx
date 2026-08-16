@@ -444,6 +444,14 @@ export function App() {
         : documents,
     [documents, hits, query],
   );
+  const visibleKnowledgeDocuments = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'knowledge'),
+    [visibleDocuments],
+  );
+  const visibleTranscripts = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'transcript'),
+    [visibleDocuments],
+  );
 
   const openWikiLink = (target: string) => {
     const pathTarget = target.split('#', 1)[0]?.replaceAll('\\', '/') ?? '';
@@ -621,9 +629,9 @@ export function App() {
           </section>
         )}
         <div className="file-section">
-          <div className="section-label">笔记 <span>{documents.length}</span></div>
-          <nav className="file-list">
-            {visibleDocuments.map((document) => (
+          <div className="section-label">笔记 <span>{visibleKnowledgeDocuments.length}</span></div>
+          <nav className="file-list" aria-label="知识笔记">
+            {visibleKnowledgeDocuments.map((document) => (
               <button
                 className={active?.path === document.path ? 'file-item active' : 'file-item'}
                 key={document.path}
@@ -635,6 +643,23 @@ export function App() {
             ))}
           </nav>
         </div>
+        {visibleTranscripts.length > 0 && (
+          <details className="file-section transcript-section">
+            <summary className="section-label"><Captions size={14} /> 媒体转录 <span>{visibleTranscripts.length}</span></summary>
+            <nav className="file-list" aria-label="媒体转录">
+              {visibleTranscripts.map((document) => (
+                <button
+                  className={active?.path === document.path ? 'file-item active' : 'file-item'}
+                  key={document.path}
+                  onClick={() => void openDocument(document.path)}
+                >
+                  <Captions size={15} />
+                  <span><strong>{document.title}</strong><small>{document.excerpt ?? '转录与时间轴'}</small></span>
+                </button>
+              ))}
+            </nav>
+          </details>
+        )}
         {!vault && (
           <div className="empty-card">
             <Bot size={22} />
