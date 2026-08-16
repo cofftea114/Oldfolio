@@ -491,17 +491,50 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   if (startupProbe) {
     mainWindow.webContents.once('did-finish-load', () => {
-      void mainWindow?.webContents.executeJavaScript(`(() => {
-        const api = window.oldfolio;
-        const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'getAISettings', 'prepareAISummary', 'applyAIChangeSet'];
-        return Boolean(api) && required.every((name) => typeof api[name] === 'function');
-      })()`).then((bridgeReady) => {
-        if (!bridgeReady) {
-          console.error('Oldfolio desktop startup probe failed: preload bridge is unavailable.');
+      void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const api = window.oldfolio;
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'getAISettings', 'prepareAISummary', 'applyAIChangeSet'];
+          const reader = document.querySelector('.markdown-reader');
+          if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
+          const clientHeight = reader?.clientHeight ?? 0;
+          const scrollHeight = reader?.scrollHeight ?? 0;
+          if (reader) reader.scrollTop = scrollHeight;
+          const plainScrollable = Boolean(reader) && scrollHeight > clientHeight && (reader?.scrollTop ?? 0) > 0;
+          const workspace = document.querySelector('.workspace');
+          const fakePlayer = document.createElement('section');
+          fakePlayer.className = 'transcript-player';
+          if (workspace && reader) {
+            workspace.classList.add('has-player');
+            workspace.insertBefore(fakePlayer, reader);
+            reader.scrollTop = reader.scrollHeight;
+          }
+          const playerClientHeight = reader?.clientHeight ?? 0;
+          const playerScrollHeight = reader?.scrollHeight ?? 0;
+          const playerScrollable = Boolean(reader) && playerScrollHeight > playerClientHeight && (reader?.scrollTop ?? 0) > 0;
+          resolve({
+            bridgeReady: Boolean(api) && required.every((name) => typeof api[name] === 'function'),
+            scrollable: plainScrollable && playerScrollable,
+            clientHeight,
+            scrollHeight,
+            playerClientHeight,
+            playerScrollHeight,
+          });
+        }));
+      })`).then((probe: {
+        bridgeReady: boolean;
+        scrollable: boolean;
+        clientHeight: number;
+        scrollHeight: number;
+        playerClientHeight: number;
+        playerScrollHeight: number;
+      }) => {
+        if (!probe.bridgeReady || !probe.scrollable) {
+          console.error(`Oldfolio desktop startup probe failed: bridge=${String(probe.bridgeReady)} scrollable=${String(probe.scrollable)} plain=${probe.clientHeight}/${probe.scrollHeight} player=${probe.playerClientHeight}/${probe.playerScrollHeight}.`);
           app.exit(1);
           return;
         }
-        console.log('Oldfolio desktop startup probe passed.');
+        console.log(`Oldfolio desktop startup probe passed. plain=${probe.clientHeight}/${probe.scrollHeight} player=${probe.playerClientHeight}/${probe.playerScrollHeight}`);
         app.quit();
       }).catch((error: unknown) => {
         console.error(`Oldfolio desktop startup probe failed: ${error instanceof Error ? error.message : String(error)}`);
