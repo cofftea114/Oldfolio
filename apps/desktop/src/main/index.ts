@@ -14,6 +14,7 @@ import { SUMMARY_TEMPLATES } from '@oldfolio/ai';
 import { AIDeviceConfigStore } from './ai-device-config.js';
 import { AISummaryService, createLocalAIProviderResolver } from './ai-summary.js';
 import { importCaptionFile } from './caption-import.js';
+import { DocumentLifecycleService } from './document-lifecycle.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
@@ -31,6 +32,7 @@ let mediaJobs: MediaJobStore | null = null;
 let mediaDeviceConfig: MediaDeviceConfigStore | null = null;
 let aiDeviceConfig: AIDeviceConfigStore | null = null;
 let aiSummary: AISummaryService | null = null;
+let documentLifecycle: DocumentLifecycleService | null = null;
 const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
@@ -78,6 +80,11 @@ function requireAIDeviceConfig(): AIDeviceConfigStore {
 function requireAISummary(): AISummaryService {
   if (!aiSummary) throw new Error('请先打开一个 Vault');
   return aiSummary;
+}
+
+function requireDocumentLifecycle(): DocumentLifecycleService {
+  if (!documentLifecycle) throw new Error('请先打开一个 Vault');
+  return documentLifecycle;
 }
 
 async function mediaSettingsSummary() {
@@ -130,6 +137,7 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   if (initialize) await repository.initialize();
   mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
   aiSummary = new AISummaryService(repository, requireAIDeviceConfig(), localAIProvider);
+  documentLifecycle = new DocumentLifecycleService(repository);
   await mediaJobs.initialize();
   await repository.rebuildIndex();
   const documents = await repository.scanDocuments();
@@ -172,6 +180,13 @@ function registerIpc(): void {
     const summaries = await Promise.all(documents.map((document) => summarizeDocument(document.path)));
     return summaries.filter((document) => document.category !== 'internal');
   });
+  ipcMain.handle('vault:create-document', async (event, title: unknown) => {
+    assertTrustedSender(event);
+    if (typeof title !== 'string' || title.length > 200) throw new TypeError('Invalid document title');
+    const created = await requireDocumentLifecycle().create(title);
+    await requireRepository().rebuildIndex();
+    return readDocument(created.path);
+  });
   ipcMain.handle('vault:read', async (event, path: unknown) => {
     assertTrustedSender(event);
     if (typeof path !== 'string') throw new TypeError('Invalid document path');
@@ -193,6 +208,40 @@ function registerIpc(): void {
       return readDocument(input.path);
     },
   );
+  ipcMain.handle(
+    'vault:delete-document',
+    async (event, input: { path?: unknown; expectedRevision?: unknown }) => {
+      assertTrustedSender(event);
+      if (typeof input?.path !== 'string' || typeof input.expectedRevision !== 'string') {
+        throw new TypeError('Invalid document deletion request');
+      }
+      const document = await readDocument(input.path);
+      if (document.category === 'internal') throw new Error('Oldfolio 内部文档不能从笔记界面删除。');
+      const confirmation = await dialog.showMessageBox(mainWindow!, {
+        type: 'warning',
+        title: '删除笔记',
+        message: `确定删除“${document.title}”吗？`,
+        detail: document.category === 'transcript'
+          ? '只删除这份转录笔记，不会删除原始音视频、来源快照或已经生成的摘要。删除后可立即撤销。'
+          : '只删除当前笔记，不会连带删除它引用的附件或其他笔记。删除后可立即撤销。',
+        buttons: ['取消', '删除笔记'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (confirmation.response !== 1) return { cancelled: true };
+      const applied = await requireDocumentLifecycle().delete(input.path, input.expectedRevision);
+      await requireRepository().rebuildIndex();
+      return { cancelled: false, historyId: applied.historyId, path: input.path };
+    },
+  );
+  ipcMain.handle('vault:undo-document-deletion', async (event, historyId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof historyId !== 'string') throw new TypeError('Invalid deletion history id');
+    const restored = await requireDocumentLifecycle().undoDelete(historyId);
+    await requireRepository().rebuildIndex();
+    return readDocument(restored.path);
+  });
   ipcMain.handle('vault:search', async (event, query: unknown): Promise<SearchHit[]> => {
     assertTrustedSender(event);
     if (typeof query !== 'string') throw new TypeError('Invalid search query');

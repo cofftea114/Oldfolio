@@ -6,6 +6,9 @@ claim that the planned 9–12 month v1 is complete.
 ## Working now
 
 - Create or open a local Vault from the Electron desktop application.
+- Create native Markdown notes with safe collision-free paths. Delete visible notes only after an
+  explicit desktop confirmation; deletion is revision-bound, recorded in Vault history, and can be
+  atomically undone from the current session. Reserved and raw OKF bundle documents stay protected.
 - Edit Markdown with optimistic revision checks; search, backlinks, properties, attachments layout,
   and rebuildable SQLite/FTS indexes are implemented in the local knowledge core.
 - Preserve unedited Markdown bytes and validate strict OKF v0.2 bundles without deleting unknown

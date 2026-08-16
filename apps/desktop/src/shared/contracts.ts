@@ -20,6 +20,12 @@ export interface VaultDocument extends DocumentSummary {
   links: string[];
 }
 
+export interface DocumentDeletionResult {
+  cancelled: boolean;
+  historyId?: string;
+  path?: string;
+}
+
 export interface SearchHit {
   path: string;
   title: string;
@@ -175,8 +181,11 @@ export interface OldfolioDesktopApi {
   chooseVault(): Promise<VaultSummary | null>;
   createVault(): Promise<VaultSummary | null>;
   listDocuments(): Promise<DocumentSummary[]>;
+  createDocument(title: string): Promise<VaultDocument>;
   readDocument(path: string): Promise<VaultDocument>;
   saveDocument(path: string, content: string, expectedRevision: string): Promise<VaultDocument>;
+  deleteDocument(path: string, expectedRevision: string): Promise<DocumentDeletionResult>;
+  undoDocumentDeletion(historyId: string): Promise<VaultDocument>;
   search(query: string): Promise<SearchHit[]>;
   backlinks(path: string): Promise<DocumentSummary[]>;
   importFeed(url: string): Promise<FeedImportResult>;

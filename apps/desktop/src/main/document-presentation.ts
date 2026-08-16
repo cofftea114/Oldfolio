@@ -10,3 +10,10 @@ export function classifyDocumentPath(path: string): DocumentCategory {
   if (TRANSCRIPT_DOCUMENT.test(path)) return 'transcript';
   return 'knowledge';
 }
+
+export function isDocumentManageable(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/');
+  return normalized.toLocaleLowerCase().endsWith('.md')
+    && !normalized.startsWith('.oldfolio/')
+    && classifyDocumentPath(normalized) !== 'internal';
+}

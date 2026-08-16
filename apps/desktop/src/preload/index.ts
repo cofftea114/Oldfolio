@@ -5,9 +5,13 @@ const api: OldfolioDesktopApi = {
   chooseVault: () => ipcRenderer.invoke('vault:choose'),
   createVault: () => ipcRenderer.invoke('vault:create'),
   listDocuments: () => ipcRenderer.invoke('vault:list'),
+  createDocument: (title) => ipcRenderer.invoke('vault:create-document', title),
   readDocument: (path) => ipcRenderer.invoke('vault:read', path),
   saveDocument: (path, content, expectedRevision) =>
     ipcRenderer.invoke('vault:save', { path, content, expectedRevision }),
+  deleteDocument: (path, expectedRevision) =>
+    ipcRenderer.invoke('vault:delete-document', { path, expectedRevision }),
+  undoDocumentDeletion: (historyId) => ipcRenderer.invoke('vault:undo-document-deletion', historyId),
   search: (query) => ipcRenderer.invoke('vault:search', query),
   backlinks: (path) => ipcRenderer.invoke('vault:backlinks', path),
   importFeed: (url) => ipcRenderer.invoke('source:import-feed', url),

@@ -8,6 +8,7 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Electron desktop shell with a sandboxed renderer and narrow preload bridge.
 - Capacitor-compatible mobile web shell.
 - Lossless native Markdown vault and strict OKF v0.2 bundle validation.
+- Native Markdown note creation plus revision-checked deletion with immediate atomic undo.
 - Rebuildable local search and link graph.
 - Local Ollama/LM Studio transcript summaries with automatic template selection, timestamp evidence,
   a controlled transcript document reader, reviewable revision-bound change sets, approval, and atomic undo.

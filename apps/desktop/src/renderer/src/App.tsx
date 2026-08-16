@@ -10,6 +10,7 @@ import {
   Network,
   PanelRightClose,
   PencilLine,
+  Plus,
   Captions,
   Radio,
   RotateCcw,
@@ -17,6 +18,7 @@ import {
   Settings2,
   Sparkles,
   Tags,
+  Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
@@ -101,6 +103,16 @@ export function App() {
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
   const [seekRequest, setSeekRequest] = useState<{ startMs: number; requestId: number } | null>(null);
+  const [newNoteOpen, setNewNoteOpen] = useState(false);
+  const [newNoteTitle, setNewNoteTitle] = useState('');
+  const [documentBusy, setDocumentBusy] = useState(false);
+  const [documentError, setDocumentError] = useState('');
+  const [deletedDocuments, setDeletedDocuments] = useState<{
+    historyId: string;
+    path: string;
+    title: string;
+  }[]>([]);
+  const deletedDocument = deletedDocuments.at(-1) ?? null;
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -117,6 +129,10 @@ export function App() {
     setPlayback(null);
     setSeekRequest(null);
     setDraft(EMPTY_MESSAGE);
+    setNewNoteOpen(false);
+    setNewNoteTitle('');
+    setDocumentError('');
+    setDeletedDocuments([]);
     await loadDocuments();
   };
 
@@ -136,6 +152,73 @@ export function App() {
     setPendingSummary(null);
     setAppliedChange(null);
     setAIError('');
+  };
+
+  const createDocument = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!vault || !newNoteTitle.trim() || documentBusy) return;
+    setDocumentBusy(true);
+    setDocumentError('');
+    try {
+      const created = await window.oldfolio.createDocument(newNoteTitle);
+      setNewNoteTitle('');
+      setNewNoteOpen(false);
+      await loadDocuments();
+      await openDocument(created.path);
+      setViewMode('edit');
+      setStatus(`已新建“${created.title}”`);
+    } catch (error: unknown) {
+      setDocumentError(error instanceof Error ? error.message : '新建笔记失败');
+    } finally {
+      setDocumentBusy(false);
+    }
+  };
+
+  const deleteActiveDocument = async () => {
+    if (!active || documentBusy || draft !== active.content) return;
+    setDocumentBusy(true);
+    setDocumentError('');
+    try {
+      const deleted = await window.oldfolio.deleteDocument(active.path, active.revision);
+      if (deleted.cancelled || !deleted.historyId || !deleted.path) return;
+      setDeletedDocuments((items) => [...items, {
+        historyId: deleted.historyId!,
+        path: deleted.path!,
+        title: active.title,
+      }]);
+      setActive(null);
+      setPlayback(null);
+      setBacklinks([]);
+      setSeekRequest(null);
+      setDraft(EMPTY_MESSAGE);
+      setSummaryPreparation(null);
+      setPendingSummary(null);
+      setAppliedChange(null);
+      await loadDocuments();
+      if (query.trim()) setHits(await window.oldfolio.search(query.trim()));
+      setStatus(`已删除“${active.title}”，可撤销`);
+    } catch (error: unknown) {
+      setDocumentError(error instanceof Error ? error.message : '删除笔记失败');
+    } finally {
+      setDocumentBusy(false);
+    }
+  };
+
+  const undoDocumentDeletion = async () => {
+    if (!deletedDocument || documentBusy) return;
+    setDocumentBusy(true);
+    setDocumentError('');
+    try {
+      const restored = await window.oldfolio.undoDocumentDeletion(deletedDocument.historyId);
+      setDeletedDocuments((items) => items.filter((item) => item.historyId !== deletedDocument.historyId));
+      await loadDocuments();
+      await openDocument(restored.path);
+      setStatus(`已恢复“${restored.title}”`);
+    } catch (error: unknown) {
+      setDocumentError(error instanceof Error ? error.message : '撤销删除失败');
+    } finally {
+      setDocumentBusy(false);
+    }
   };
 
   const toggleAISettings = async () => {
@@ -515,6 +598,14 @@ export function App() {
           <Search size={15} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索笔记与知识…" />
         </label>
+        {deletedDocument && (
+          <div className="deletion-notice" role="status">
+            <span>{deletedDocuments.length > 1 ? `已删除 ${deletedDocuments.length} 份笔记，最近一份` : '已删除'}<strong>{deletedDocument.title}</strong></span>
+            <button disabled={documentBusy} onClick={() => void undoDocumentDeletion()} type="button">
+              <RotateCcw size={13} />撤销
+            </button>
+          </div>
+        )}
         {importOpen && (
           <form className="source-import" onSubmit={(event) => void importFeed(event)}>
             <div className="section-label"><Radio size={14} /> 导入 RSS / Podcast</div>
@@ -629,7 +720,34 @@ export function App() {
           </section>
         )}
         <div className="file-section">
-          <div className="section-label">笔记 <span>{visibleKnowledgeDocuments.length}</span></div>
+          <div className="file-section-heading">
+            <div className="section-label">笔记 <span>{visibleKnowledgeDocuments.length}</span></div>
+            <button
+              aria-label="新建笔记"
+              className="mini-icon-button"
+              disabled={!vault || documentBusy}
+              onClick={() => {
+                setNewNoteOpen((value) => !value);
+                setDocumentError('');
+              }}
+              title="新建笔记"
+              type="button"
+            ><Plus size={14} /></button>
+          </div>
+          {newNoteOpen && (
+            <form className="new-note-form" onSubmit={(event) => void createDocument(event)}>
+              <input
+                aria-label="新笔记标题"
+                autoFocus
+                maxLength={200}
+                onChange={(event) => setNewNoteTitle(event.target.value)}
+                placeholder="输入笔记标题"
+                value={newNoteTitle}
+              />
+              <button disabled={!newNoteTitle.trim() || documentBusy} type="submit">创建</button>
+            </form>
+          )}
+          {documentError && <p className="document-error" role="alert">{documentError}</p>}
           <nav className="file-list" aria-label="知识笔记">
             {visibleKnowledgeDocuments.map((document) => (
               <button
@@ -688,6 +806,14 @@ export function App() {
                 type="button"
               ><PencilLine size={14} />编辑</button>
             </div>
+            <button
+              aria-label="删除当前笔记"
+              className="icon-button danger-button"
+              disabled={!active || documentBusy || draft !== active.content}
+              onClick={() => void deleteActiveDocument()}
+              title={active && draft !== active.content ? '等待当前修改保存后再删除' : '删除当前笔记'}
+              type="button"
+            ><Trash2 /></button>
             <button
               aria-label={detailsOpen ? '收起详情' : '展开详情'}
               aria-pressed={detailsOpen}

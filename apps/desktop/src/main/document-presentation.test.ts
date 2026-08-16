@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyDocumentPath } from './document-presentation.js';
+import { classifyDocumentPath, isDocumentManageable } from './document-presentation.js';
 
 describe('desktop document presentation', () => {
   it('separates knowledge notes and transcripts while hiding bundle internals', () => {
@@ -32,5 +32,13 @@ describe('desktop document presentation', () => {
     expect(classifyDocumentPath('bundles/creators/alice/log.md')).toBe('internal');
     expect(classifyDocumentPath('bundles/creators/alice/raw/source.md')).toBe('internal');
     expect(classifyDocumentPath('bundles/creators/alice/wiki/perspective.md')).toBe('knowledge');
+  });
+
+  it('allows lifecycle actions only for visible Markdown documents', () => {
+    expect(isDocumentManageable('notes/idea.md')).toBe(true);
+    expect(isDocumentManageable('bundles/personal/wiki/summaries/video.md')).toBe(true);
+    expect(isDocumentManageable('bundles/personal/raw/source.md')).toBe(false);
+    expect(isDocumentManageable('.oldfolio/history/private.json')).toBe(false);
+    expect(isDocumentManageable('.oldfolio/cache/fake.md')).toBe(false);
   });
 });
