@@ -118,11 +118,16 @@ describe('desktop AI summary workflow', () => {
           content: JSON.stringify({
             title: '安装教程摘要',
             overview: { text: '安装前备份，安装后验证。', evidenceIds: ['segment-00001', 'segment-00002'] },
-            keyPoints: [
-              { text: '先备份配置。', evidenceIds: ['segment-00001'] },
-              { text: '安装后检查版本。', evidenceIds: ['segment-00002'] },
+            sections: [
+              {
+                heading: '准备与验证',
+                summary: '安装流程包含准备和验证两个阶段。',
+                points: ['先备份配置。', '安装后检查版本。'],
+                evidenceIds: ['segment-00001'],
+              },
             ],
-            concepts: [{ name: '验证', explanation: '检查版本确认安装结果。', evidenceIds: ['segment-00002'] }],
+            takeaways: ['先备份，再安装，最后验证。'],
+            uncertainties: [],
           }),
           model: 'qwen3:8b',
           finishReason: 'stop',
@@ -137,10 +142,12 @@ describe('desktop AI summary workflow', () => {
     });
     const pending = await service.generate(transcript.path, preparation.sourceRevision, preparation.suggestedTemplate);
     expect(pending).toMatchObject({ riskLevel: 'L1', model: 'qwen3:8b', usage: { inputTokens: 100, outputTokens: 80 } });
-    expect(pending.content).toContain('## 核心结论');
-    expect(pending.content).toContain('## 作者的主要观点');
+    expect(pending.content).toContain('## 内容概览');
+    expect(pending.content).toContain('## 主题笔记');
+    expect(pending.content).toContain('### 准备与验证');
+    expect(pending.content).toContain('## 总结与启发');
     expect(pending.content).toContain('[定位 00:01](assets/media/lesson.mp4#t=1.000)');
-    expect(pending.content).not.toContain('## 概念');
+    expect(pending.content).not.toContain('## 转录存疑');
     const workingDocument = await vault.read(`.oldfolio/cache/ai-inputs/${preparation.sourceRevision}.txt`);
     expect(workingDocument.text).toContain('[segment-00001 00:00:01.000]');
     await expect(vault.read(pending.targetPath)).rejects.toBeInstanceOf(VaultNotFoundError);

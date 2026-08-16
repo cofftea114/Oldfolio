@@ -255,8 +255,14 @@ describe('AI security boundaries', () => {
           content: JSON.stringify({
             title: '安装步骤摘要',
             overview: { text: '先备份，再安装并验证。', evidenceIds: ['segment-00001', 'segment-00002'] },
-            keyPoints: [{ text: '安装前备份配置。', evidenceIds: ['segment-00001'] }],
-            concepts: [{ name: '安装验证', explanation: '安装后检查版本。', evidenceIds: ['segment-00002'] }],
+            sections: [{
+              heading: '安装与验证',
+              summary: '安装流程从备份开始，并以版本验证结束。',
+              points: ['安装前备份配置。', '安装后检查版本。'],
+              evidenceIds: ['segment-00001'],
+            }],
+            takeaways: ['先保护现有配置，再执行安装并确认结果。'],
+            uncertainties: [],
           }),
           model: 'test-model',
           finishReason: 'stop',
@@ -267,7 +273,7 @@ describe('AI security boundaries', () => {
       providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
     }, prepared);
     expect(generated.template).toBe('tutorial');
-    expect(generated.summary.keyPoints[0]?.evidenceIds).toEqual(['segment-00001']);
+    expect(generated.summary.sections[0]?.evidenceIds).toEqual(['segment-00001']);
   });
 
   it('rejects summary claims that cite evidence the transcript did not provide', async () => {
@@ -284,8 +290,9 @@ describe('AI security boundaries', () => {
         content: JSON.stringify({
           title: 'Invalid',
           overview: { text: 'Unsupported.', evidenceIds: ['segment-99999'] },
-          keyPoints: [{ text: 'Evidence.', evidenceIds: ['segment-00001'] }],
-          concepts: [],
+          sections: [{ heading: 'Evidence', summary: 'Evidence.', points: ['Evidence.'], evidenceIds: ['segment-00001'] }],
+          takeaways: ['Evidence.'],
+          uncertainties: [],
         }),
         model: 'test-model', finishReason: 'stop',
       }),
@@ -321,6 +328,7 @@ describe('AI security boundaries', () => {
         if (!firstEvidenceId) throw new Error('The request did not contain source evidence.');
         const properties = (request.responseSchema as { readonly properties?: Record<string, unknown> } | undefined)?.properties;
         if (properties && 'notes' in properties) {
+          expect(properties.notes).toMatchObject({ maxLength: 1_400 });
           const evidenceIdSchema = properties.evidenceIds as {
             readonly items?: { readonly enum?: readonly string[] };
           } | undefined;
@@ -342,14 +350,14 @@ describe('AI security boundaries', () => {
           content: JSON.stringify({
             title: 'Long lesson summary',
             overview: { text: 'Supported overview. '.repeat(50), evidenceIds: [firstEvidenceId] },
-            keyPoints: Array.from({ length: 8 }, () => ({
-              text: 'Supported point. '.repeat(30), evidenceIds: [firstEvidenceId],
-            })),
-            concepts: Array.from({ length: 4 }, (_, conceptIndex) => ({
-              name: `Concept ${conceptIndex + 1}`,
-              explanation: 'Supported explanation. '.repeat(24),
+            sections: Array.from({ length: 8 }, (_, sectionIndex) => ({
+              heading: `Theme ${sectionIndex + 1}`,
+              summary: 'Supported section. '.repeat(20),
+              points: ['Supported point. '.repeat(12), 'Supported reason. '.repeat(12)],
               evidenceIds: [firstEvidenceId],
             })),
+            takeaways: ['Supported takeaway.'],
+            uncertainties: [],
           }),
           model: 'test-model', finishReason: 'stop',
           usage: { inputTokens: 100, outputTokens: 20 },
@@ -394,15 +402,10 @@ describe('AI security boundaries', () => {
         if (!properties) throw new Error('The request did not provide a response schema.');
         if ('notes' in properties) {
           readerCallCount += 1;
-          const dataMessage = request.messages.at(-1)?.content ?? '';
-          const serializedEnvelope = dataMessage
-            .replace(/^UNTRUSTED_DATA_JSON\n/u, '')
-            .replace(/\nEND_UNTRUSTED_DATA_JSON$/u, '');
-          const envelope = JSON.parse(serializedEnvelope) as {
-            readonly records: readonly { readonly sourceId: string; readonly content: string }[];
+          const evidenceIdSchema = properties.evidenceIds as {
+            readonly items?: { readonly enum?: readonly string[] };
           };
-          const windowRecord = envelope.records.find((record) => record.sourceId.includes('#window-'));
-          const evidenceIds = [...new Set(windowRecord?.content.match(/segment-\d{5}/gu) ?? [])];
+          const evidenceIds = evidenceIdSchema.items?.enum ?? [];
           return Promise.resolve({
             content: JSON.stringify({
               notes: `第 ${readerCallCount} 个阅读窗口保留的独立观点。`,
@@ -414,10 +417,13 @@ describe('AI security boundaries', () => {
         const overview = properties.overview as {
           readonly properties?: { readonly evidenceIds?: { readonly items?: { readonly enum?: readonly string[] } } };
         };
+        const sections = properties.sections as { readonly minItems?: number };
+        expect(sections.minItems).toBe(3);
         const evidenceIds = overview.properties?.evidenceIds?.items?.enum ?? [];
         finalEvidenceAllowlistLength = evidenceIds.length;
         if (evidenceIds.length === 0) throw new Error('The final synthesis did not receive representative evidence.');
         const finalPrompt = request.messages.map((message) => message.content).join('\n');
+        expect(finalPrompt).toContain('Checkpoints may contain ASR errors');
         for (let index = 1; index <= readerCallCount; index += 1) {
           expect(finalPrompt).toContain(`第 ${index} 个阅读窗口保留的独立观点。`);
         }
@@ -425,8 +431,14 @@ describe('AI security boundaries', () => {
           content: JSON.stringify({
             title: '观点摘要',
             overview: { text: '视频提出并论证了一个核心观点。', evidenceIds },
-            keyPoints: [{ text: '连续细节服务于同一论点。', evidenceIds }],
-            concepts: [],
+            sections: Array.from({ length: 3 }, (_, index) => ({
+              heading: `主题 ${index + 1}`,
+              summary: '连续细节服务于同一论点。',
+              points: ['归纳观点。', '解释理由。'],
+              evidenceIds,
+            })),
+            takeaways: ['理解作者的核心论证。'],
+            uncertainties: [],
           }),
           model: 'test-model', finishReason: 'stop',
         });
@@ -441,5 +453,6 @@ describe('AI security boundaries', () => {
     expect(readerCallCount).toBeGreaterThan(1);
     expect(finalEvidenceAllowlistLength).toBeLessThanOrEqual(24);
     expect(generated.summary.overview.evidenceIds).toHaveLength(1);
+    expect(generated.summary.sections).toHaveLength(3);
   });
 });

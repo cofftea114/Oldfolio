@@ -23,7 +23,7 @@ import {
   probeMediaDuration,
 } from './media-analysis.js';
 import { importLocalModel } from './model-store.js';
-import { parseTranscriptPlaybackManifest } from './playback.js';
+import { parseSynthesisTranscriptPath, parseTranscriptPlaybackManifest } from './playback.js';
 import { ControlledProcessError, runControlledProcess } from './process.js';
 import { compileTranscriptDocument } from './transcript-document.js';
 import { WhisperCppTranscriber, verifyLocalModel } from './whisper.js';
@@ -85,6 +85,24 @@ describe('caption parsing and OKF compilation', () => {
       transcript.content.replace('(assets/a.mp3#t=1.000)', '(assets/other.mp3#t=1.000)'),
       transcript.path,
     )).toBeNull();
+  });
+
+  it('resolves the transcript linked by a Synthesis note for source playback', () => {
+    const sourcePath = 'bundles/personal/wiki/transcripts/source.md';
+    const synthesis = [
+      '---',
+      'type: Synthesis',
+      'title: Summary',
+      'oldfolio:',
+      '  id: synthesis-01',
+      `  source_path: ${sourcePath}`,
+      '---',
+      '',
+      '# Summary',
+    ].join('\n');
+
+    expect(parseSynthesisTranscriptPath(synthesis, 'bundles/personal/wiki/summaries/summary.md')).toBe(sourcePath);
+    expect(parseSynthesisTranscriptPath('# Ordinary note', 'notes/note.md')).toBeNull();
   });
 });
 

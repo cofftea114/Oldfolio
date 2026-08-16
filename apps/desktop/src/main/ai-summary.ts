@@ -141,13 +141,11 @@ function replacementDiff(path: string, previous: string | null, content: string)
 
 function collectEvidenceIds(summary: {
   readonly overview: { readonly evidenceIds: readonly string[] };
-  readonly keyPoints: readonly { readonly evidenceIds: readonly string[] }[];
-  readonly concepts: readonly { readonly evidenceIds: readonly string[] }[];
+  readonly sections: readonly { readonly evidenceIds: readonly string[] }[];
 }): string[] {
   return [...new Set([
     ...summary.overview.evidenceIds,
-    ...summary.keyPoints.flatMap((item) => item.evidenceIds),
-    ...summary.concepts.flatMap((item) => item.evidenceIds),
+    ...summary.sections.flatMap((item) => item.evidenceIds),
   ])];
 }
 
@@ -242,25 +240,36 @@ export class AISummaryService {
     const body = [
       `# ${markdownText(generated.summary.title)}`,
       '',
-      `> 来源：[[${sourcePath}]]`,
+      `> 来源：[[${sourcePath}|原始转录]]`,
       `> 摘要方式：${summaryTemplateLabels[generated.template]}`,
       '> 提示：本笔记根据自动转录生成；原转录可能存在识别错误，请通过“定位”链接返回视频核对。',
       '',
-      '## 核心结论',
+      '## 内容概览',
       '',
       `${markdownText(generated.summary.overview.text)} ${links(generated.summary.overview.evidenceIds)}`,
       '',
-      '## 作者的主要观点',
+      '## 主题笔记',
       '',
-      ...generated.summary.keyPoints.map((item) => `- ${markdownText(item.text)} ${links(item.evidenceIds)}`),
-      ...(generated.summary.concepts.length === 0
+      ...generated.summary.sections.flatMap((section) => [
+        `### ${markdownText(section.heading)}`,
+        '',
+        `${markdownText(section.summary)} ${links(section.evidenceIds)}`,
+        '',
+        ...section.points.map((point) => `- ${markdownText(point)}`),
+        '',
+      ]),
+      '## 总结与启发',
+      '',
+      ...generated.summary.takeaways.map((takeaway) => `- ${markdownText(takeaway)}`),
+      ...(generated.summary.uncertainties.length === 0
         ? []
-        : ['', '## 关键词与背景', '', ...generated.summary.concepts.flatMap((item) => [
-            `### ${markdownText(item.name)}`,
+        : [
             '',
-            `${markdownText(item.explanation)} ${links(item.evidenceIds)}`,
+            '## 转录存疑',
             '',
-          ])]),
+            '> [!warning] 需要回看原视频确认',
+            ...generated.summary.uncertainties.map((uncertainty) => `> - ${markdownText(uncertainty)}`),
+          ]),
     ].join('\n');
     const content = serializeNewOkfConcept({
       frontmatter: {

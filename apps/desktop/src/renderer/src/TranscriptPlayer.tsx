@@ -4,6 +4,7 @@ import type { TranscriptPlaybackSummary } from '../../shared/contracts';
 
 interface TranscriptPlayerProps {
   playback: TranscriptPlaybackSummary;
+  seekRequest?: { readonly startMs: number; readonly requestId: number } | null;
 }
 
 function activeSegmentAt(segments: TranscriptPlaybackSummary['segments'], currentMs: number): number {
@@ -23,7 +24,7 @@ function activeSegmentAt(segments: TranscriptPlaybackSummary['segments'], curren
   return result;
 }
 
-export function TranscriptPlayer({ playback }: TranscriptPlayerProps) {
+export function TranscriptPlayer({ playback, seekRequest }: TranscriptPlayerProps) {
   const mediaRef = useRef<HTMLMediaElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const [currentMs, setCurrentMs] = useState(0);
@@ -43,6 +44,10 @@ export function TranscriptPlayer({ playback }: TranscriptPlayerProps) {
   };
 
   const onTimeUpdate = () => setCurrentMs(Math.floor((mediaRef.current?.currentTime ?? 0) * 1_000));
+
+  useEffect(() => {
+    if (seekRequest) seek(seekRequest.startMs);
+  }, [seekRequest]);
 
   return (
     <section className="transcript-player" aria-label="转录媒体播放器">

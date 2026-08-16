@@ -53,3 +53,11 @@ export function parseTranscriptPlaybackManifest(content: string, path: string): 
     segments,
   };
 }
+
+/** Returns the transcript linked by an Oldfolio Synthesis so its timestamp anchors remain playable. */
+export function parseSynthesisTranscriptPath(content: string, path: string): string | null {
+  const parsed = parseOkfDocument(content, bundleRelativePath(path));
+  if (!parsed.valid || parsed.kind !== 'concept' || parsed.frontmatter?.type !== 'Synthesis') return null;
+  const sourcePath = parsed.frontmatter.oldfolio?.source_path;
+  return typeof sourcePath === 'string' && sourcePath.endsWith('.md') ? sourcePath : null;
+}

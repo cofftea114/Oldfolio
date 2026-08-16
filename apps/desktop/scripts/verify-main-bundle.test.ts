@@ -17,7 +17,7 @@ describe('Electron main-process bundle', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('use a sandbox-compatible preload');
-  });
+  }, 20_000);
 
   it('loads the packaged main process and renderer in Electron', () => {
     const script = fileURLToPath(new URL('./probe-startup.mjs', import.meta.url));

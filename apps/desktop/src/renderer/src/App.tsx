@@ -1,5 +1,6 @@
 import {
   BookOpenText,
+  BookOpen,
   Bot,
   CheckCircle2,
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   FolderOpen,
   Network,
   PanelRightClose,
+  PencilLine,
   Captions,
   Radio,
   RotateCcw,
@@ -34,6 +36,7 @@ import type {
   VaultSummary,
 } from '../../shared/contracts';
 import { MarkdownEditor } from './MarkdownEditor';
+import { MarkdownReader } from './MarkdownReader';
 import { TranscriptPlayer } from './TranscriptPlayer';
 
 const EMPTY_MESSAGE = '# 欢迎来到 Oldfolio\n\n选择或创建一个本地 Vault 开始记录。';
@@ -96,6 +99,8 @@ export function App() {
   const [summaryTemplate, setSummaryTemplate] = useState<AISummaryTemplate>('course');
   const [pendingSummary, setPendingSummary] = useState<AIPendingSummaryChange | null>(null);
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
+  const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
+  const [seekRequest, setSeekRequest] = useState<{ startMs: number; requestId: number } | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -110,6 +115,7 @@ export function App() {
     setVault(next);
     setActive(null);
     setPlayback(null);
+    setSeekRequest(null);
     setDraft(EMPTY_MESSAGE);
     await loadDocuments();
   };
@@ -124,6 +130,8 @@ export function App() {
     setDraft(document.content);
     setBacklinks(nextBacklinks);
     setPlayback(nextPlayback);
+    setSeekRequest(null);
+    setViewMode(document.path.startsWith('bundles/') ? 'read' : 'edit');
     setSummaryPreparation(null);
     setPendingSummary(null);
     setAppliedChange(null);
@@ -437,6 +445,26 @@ export function App() {
     [documents, hits, query],
   );
 
+  const openWikiLink = (target: string) => {
+    const pathTarget = target.split('#', 1)[0]?.replaceAll('\\', '/') ?? '';
+    const withExtension = pathTarget.endsWith('.md') ? pathTarget : `${pathTarget}.md`;
+    const candidate = documents.find((document) => document.path === pathTarget || document.path === withExtension)
+      ?? documents.find((document) => document.title === pathTarget || document.title === pathTarget.replace(/\.md$/iu, ''));
+    if (candidate) {
+      void openDocument(candidate.path);
+    } else {
+      setStatus(`找不到链接笔记：${pathTarget}`);
+    }
+  };
+
+  const seekFromNote = (startMs: number) => {
+    if (!playback) {
+      setStatus('当前笔记没有可播放的来源媒体');
+      return;
+    }
+    setSeekRequest((current) => ({ startMs, requestId: (current?.requestId ?? 0) + 1 }));
+  };
+
   return (
     <main className="app-shell">
       <header className="titlebar">
@@ -620,10 +648,41 @@ export function App() {
       <section className={playback ? 'workspace has-player' : 'workspace'}>
         <div className="workspace-toolbar">
           <div className="document-type"><span>MD</span>{active?.path ?? '起始页'}</div>
-          <button className="icon-button" title="切换详情" onClick={() => setDetailsOpen((value) => !value)}><PanelRightClose /></button>
+          <div className="workspace-actions">
+            <div className="view-switch" role="group" aria-label="笔记显示模式">
+              <button
+                aria-pressed={viewMode === 'read'}
+                className={viewMode === 'read' ? 'active' : ''}
+                onClick={() => setViewMode('read')}
+                type="button"
+              ><BookOpen size={14} />阅读</button>
+              <button
+                aria-pressed={viewMode === 'edit'}
+                className={viewMode === 'edit' ? 'active' : ''}
+                onClick={() => setViewMode('edit')}
+                type="button"
+              ><PencilLine size={14} />编辑</button>
+            </div>
+            <button
+              aria-label={detailsOpen ? '收起详情' : '展开详情'}
+              aria-pressed={detailsOpen}
+              className="icon-button"
+              title={detailsOpen ? '收起详情' : '展开详情'}
+              onClick={() => setDetailsOpen((value) => !value)}
+              type="button"
+            ><PanelRightClose /></button>
+          </div>
         </div>
-        {playback && <TranscriptPlayer key={`${active?.path ?? ''}-${playback.resource}`} playback={playback} />}
-        <MarkdownEditor key={active?.path ?? 'welcome'} value={draft} onChange={setDraft} />
+        {playback && (
+          <TranscriptPlayer
+            key={`${active?.path ?? ''}-${playback.resource}`}
+            playback={playback}
+            seekRequest={seekRequest}
+          />
+        )}
+        {viewMode === 'read'
+          ? <MarkdownReader value={draft} onOpenDocument={openWikiLink} onSeek={seekFromNote} />
+          : <MarkdownEditor key={active?.path ?? 'welcome'} value={draft} onChange={setDraft} />}
       </section>
 
       {detailsOpen && (

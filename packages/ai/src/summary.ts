@@ -17,14 +17,14 @@ import {
 const MAX_SOURCE_CHARACTERS = 200_000;
 const MAX_DOCUMENT_WINDOW_CHARACTERS = 3_500;
 const MAX_SEGMENT_PART_CHARACTERS = 2_500;
-const MAX_WORKING_NOTES_CHARACTERS = 1_800;
-const MAX_FINAL_CHECKPOINT_CHARACTERS = 5_000;
-const MAX_FINAL_SYNTHESIS_CHARACTERS = 10_000;
+const MAX_WORKING_NOTES_CHARACTERS = 1_400;
+const MAX_FINAL_CHECKPOINT_CHARACTERS = 4_000;
+const MAX_FINAL_SYNTHESIS_CHARACTERS = 6_500;
 const MAX_READER_EVIDENCE_IDS = 24;
 const MAX_SUMMARY_EVIDENCE_IDS = 1;
-const MAX_READER_OUTPUT_TOKENS = 1_024;
-const MAX_OUTPUT_TOKENS_PER_CALL = 1_536;
-const PROMPT_VERSION = 'transcript-summary-v6-readable-viewpoints';
+const MAX_READER_OUTPUT_TOKENS = 1_280;
+const MAX_OUTPUT_TOKENS_PER_CALL = 2_560;
+const PROMPT_VERSION = 'transcript-summary-v7-thematic-notes';
 
 export interface TranscriptSummarySegment {
   readonly startMs: number;
@@ -54,17 +54,19 @@ const citedTextSchema = z.object({
   evidenceIds: z.array(z.string().trim().min(1)).min(1).max(MAX_SUMMARY_EVIDENCE_IDS),
 }).strict();
 
-const conceptSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  explanation: z.string().trim().min(1).max(4_000),
+const sectionSchema = z.object({
+  heading: z.string().trim().min(1).max(120),
+  summary: z.string().trim().min(1).max(4_000),
+  points: z.array(z.string().trim().min(1).max(2_000)).min(1).max(6),
   evidenceIds: z.array(z.string().trim().min(1)).min(1).max(MAX_SUMMARY_EVIDENCE_IDS),
 }).strict();
 
 export const transcriptSummarySchema = z.object({
   title: z.string().trim().min(1).max(200),
   overview: citedTextSchema,
-  keyPoints: z.array(citedTextSchema).min(1).max(16),
-  concepts: z.array(conceptSchema).max(12),
+  sections: z.array(sectionSchema).min(1).max(8),
+  takeaways: z.array(z.string().trim().min(1).max(2_000)).min(1).max(6),
+  uncertainties: z.array(z.string().trim().min(1).max(1_000)).max(6),
 }).strict();
 
 export type GeneratedTranscriptSummary = z.infer<typeof transcriptSummarySchema>;
@@ -73,14 +75,13 @@ const modelCitedTextSchema = citedTextSchema.extend({
   evidenceIds: z.array(z.string().trim().min(1)).min(1),
 }).strict();
 
-const modelConceptSchema = conceptSchema.extend({
+const modelSectionSchema = sectionSchema.extend({
   evidenceIds: z.array(z.string().trim().min(1)).min(1),
 }).strict();
 
 const modelTranscriptSummarySchema = transcriptSummarySchema.extend({
   overview: modelCitedTextSchema,
-  keyPoints: z.array(modelCitedTextSchema).min(1).max(16),
-  concepts: z.array(modelConceptSchema).max(12),
+  sections: z.array(modelSectionSchema).min(1).max(8),
 }).strict();
 
 export interface PreparedTranscriptSummary {
@@ -115,11 +116,11 @@ function evidenceIdsResponseSchema(allowedEvidenceIds: readonly string[], maxIte
   } as const;
 }
 
-function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
+function summaryResponseSchema(allowedEvidenceIds: readonly string[], minimumSections: number) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['title', 'overview', 'keyPoints', 'concepts'],
+    required: ['title', 'overview', 'sections', 'takeaways', 'uncertainties'],
     properties: {
       title: { type: 'string' },
       overview: {
@@ -131,31 +132,37 @@ function summaryResponseSchema(allowedEvidenceIds: readonly string[]) {
           evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
         },
       },
-      keyPoints: {
+      sections: {
         type: 'array',
-        minItems: 1,
+        minItems: minimumSections,
+        maxItems: 8,
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['text', 'evidenceIds'],
+          required: ['heading', 'summary', 'points', 'evidenceIds'],
           properties: {
-            text: { type: 'string' },
+            heading: { type: 'string' },
+            summary: { type: 'string' },
+            points: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 6,
+              items: { type: 'string' },
+            },
             evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
           },
         },
       },
-      concepts: {
+      takeaways: {
         type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['name', 'explanation', 'evidenceIds'],
-          properties: {
-            name: { type: 'string' },
-            explanation: { type: 'string' },
-            evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
-          },
-        },
+        minItems: 1,
+        maxItems: 6,
+        items: { type: 'string' },
+      },
+      uncertainties: {
+        type: 'array',
+        maxItems: 6,
+        items: { type: 'string' },
       },
     },
   } as const;
@@ -176,7 +183,7 @@ function readerNotesResponseSchema(allowedEvidenceIds: readonly string[]) {
     additionalProperties: false,
     required: ['notes', 'evidenceIds'],
     properties: {
-      notes: { type: 'string' },
+      notes: { type: 'string', maxLength: MAX_WORKING_NOTES_CHARACTERS },
       evidenceIds: evidenceIdsResponseSchema(allowedEvidenceIds, MAX_READER_EVIDENCE_IDS),
     },
   } as const;
@@ -364,8 +371,7 @@ function validateEvidenceReferences(summary: GeneratedTranscriptSummary, allowed
   const allowed = new Set(allowedEvidenceIds);
   const references = [
     ...summary.overview.evidenceIds,
-    ...summary.keyPoints.flatMap((item) => item.evidenceIds),
-    ...summary.concepts.flatMap((item) => item.evidenceIds),
+    ...summary.sections.flatMap((item) => item.evidenceIds),
   ];
   for (const id of references) {
     if (!allowed.has(id)) throw new Error(`The model cited unknown transcript evidence "${id}".`);
@@ -393,11 +399,7 @@ function normalizeTranscriptSummary(
       ...summary.overview,
       evidenceIds: selectRepresentativeEvidenceIds(summary.overview.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
     },
-    keyPoints: summary.keyPoints.map((item) => ({
-      ...item,
-      evidenceIds: selectRepresentativeEvidenceIds(item.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
-    })),
-    concepts: summary.concepts.map((item) => ({
+    sections: summary.sections.map((item) => ({
       ...item,
       evidenceIds: selectRepresentativeEvidenceIds(item.evidenceIds, MAX_SUMMARY_EVIDENCE_IDS),
     })),
@@ -455,12 +457,16 @@ async function readDocumentWindow(
   readonly evidenceIds: readonly string[];
   readonly completion: AICompletion;
 }> {
-  const allowedEvidenceIds = [...new Set([...previousEvidenceIds, ...window.evidenceIds])];
+  const allowedEvidenceIds = selectRepresentativeEvidenceIds(
+    [...previousEvidenceIds, ...window.evidenceIds],
+    MAX_READER_EVIDENCE_IDS,
+  );
   const task = [
     `Read window ${windowIndex + 1} of ${windowCount} from the transcript working document.`,
     `The document title is: ${prepared.title}. Use it as context for resolving speech-recognition errors.`,
     outputLanguageInstruction(outputLanguage),
     'Update one concise global set of viewpoint-level working notes; integrate new information with earlier notes instead of summarizing this window independently.',
+    'Keep the notes as a numbered thematic outline. Preserve earlier distinct themes when later windows introduce unrelated themes; merge only genuine duplicates.',
     'Focus on theses, arguments, supporting reasons, disagreements, changes of position, conclusions, and only the examples needed to understand them.',
     'Do not produce a sentence-by-sentence recap and do not retain one evidence id for every subtitle line.',
     'Never promote a suspicious or garbled transcript token into a named idea. Omit it when the meaning is unclear, or explicitly mark it as transcription-uncertain.',
@@ -509,6 +515,7 @@ async function completeSummary(
   mediaType: string,
   content: string,
   allowedEvidenceIds: Iterable<string>,
+  minimumSections: number,
   context?: AIInvocationContext,
 ): Promise<{ readonly summary: GeneratedTranscriptSummary; readonly completion: AICompletion }> {
   const allowedIds = [...new Set(allowedEvidenceIds)];
@@ -520,7 +527,7 @@ async function completeSummary(
     temperature: 0.2,
     maxOutputTokens: MAX_OUTPUT_TOKENS_PER_CALL,
     responseFormat: 'json',
-    responseSchema: summaryResponseSchema(allowedIds),
+    responseSchema: summaryResponseSchema(allowedIds, minimumSections),
   }, context);
   const modelSummary = parseStructuredOutput(completion.content, modelTranscriptSummarySchema);
   validateEvidenceReferences(modelSummary, allowedIds);
@@ -559,13 +566,17 @@ export async function generateTranscriptSummary(
     `The source title is: ${prepared.title}.`,
     outputLanguageInstruction(outputLanguage),
     templateGuidance[requestedTemplate],
-    'Synthesize the video author\'s main viewpoints and reasoning instead of recapping the transcript sentence by sentence.',
-    'Write a plain, concrete title and overview that a general reader can understand without watching the video first.',
-    'Make key points non-overlapping: each key point should state one viewpoint and briefly explain the author\'s reasoning.',
-    'Concepts are only for terms that genuinely need a separate definition; return an empty concepts array rather than repeating key points.',
+    'Synthesize the author\'s viewpoints and reasoning; do not recap sentence by sentence.',
+    'Use a plain title and overview understandable without watching the video.',
+    'Create distinct thematic sections. Each needs a short heading, an explanatory paragraph, and 2-5 substantive points about definitions, reasons, examples, tensions, or changing positions.',
+    'For long documents, preserve every major non-duplicate checkpoint theme in 3-8 sections; never collapse unrelated themes into a generic bullet.',
+    'Define important terms inside their relevant section.',
+    'End with conclusions or takeaways supported by the speaker; invent nothing.',
+    'List only important names or phrases still unclear from context in uncertainties; otherwise use an empty array.',
     'The transcript may contain speech-recognition errors. Use the source title and surrounding argument to resolve only obvious errors. Never repeat a suspicious token as a named idea; omit it or explicitly mark it as transcription-uncertain.',
+    'Checkpoints may contain ASR errors. Never copy malformed quotes, names, or terms. Correct only obvious variants; otherwise omit exact wording, paraphrase supported meaning, or list it in uncertainties.',
     'Return only the requested JSON object.',
-    `Use only 1-${MAX_SUMMARY_EVIDENCE_IDS} representative evidenceIds for each overview, key point, or concept as playback anchors for the whole viewpoint, not as citations for every sentence.`,
+    `Use only 1-${MAX_SUMMARY_EVIDENCE_IDS} representative evidenceIds for each overview or thematic section as a playback anchor for the whole theme, not as a citation for every sentence or bullet.`,
     'Do not introduce facts that are not supported by the transcript; evidence anchors are representative rather than exhaustive.',
   ].join(' ');
   const windows = buildDocumentWindows(prepared.evidence);
@@ -579,6 +590,7 @@ export async function generateTranscriptSummary(
       'text/plain',
       prepared.workingDocumentContent,
       prepared.evidence.map((item) => item.id),
+      1,
       context,
     );
     return Object.freeze({
@@ -618,11 +630,12 @@ export async function generateTranscriptSummary(
   const final = await completeSummary(
     provider,
     config,
-    `${task} Use every reading checkpoint from the complete document, cover the early, middle, and late arguments, remove repetition, and return the final synthesis now.`,
+    `${task} Use every checkpoint and cover early, middle, and late arguments in 3-8 non-overlapping sections. Each distinct theme must appear or merge only with an equivalent theme. Remove repetition.`,
     `${prepared.workingDocumentPath}#final-synthesis`,
     'application/vnd.oldfolio.document-notes+json',
     finalEvidencePayload(prepared, representativeEvidenceIds, readingCheckpoints),
     representativeEvidenceIds,
+    3,
     context,
   );
   completions.push(final.completion);

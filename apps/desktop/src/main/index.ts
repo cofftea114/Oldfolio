@@ -5,6 +5,7 @@ import {
   MediaDeviceConfigStore,
   MediaJobStore,
   importLocalModel,
+  parseSynthesisTranscriptPath,
   parseTranscriptPlaybackManifest,
   probeMediaTools,
 } from '@oldfolio/media';
@@ -375,8 +376,18 @@ function registerIpc(): void {
   ipcMain.handle('media:get-playback', async (event, path: unknown) => {
     assertTrustedSender(event);
     if (typeof path !== 'string') throw new TypeError('Invalid transcript path');
-    const document = await requireRepository().read(path);
-    const manifest = parseTranscriptPlaybackManifest(document.text, document.path);
+    const target = requireRepository();
+    const document = await target.read(path);
+    let manifest = parseTranscriptPlaybackManifest(document.text, document.path);
+    const linkedTranscriptPath = manifest ? null : parseSynthesisTranscriptPath(document.text, document.path);
+    if (linkedTranscriptPath) {
+      try {
+        const transcript = await target.read(linkedTranscriptPath);
+        manifest = parseTranscriptPlaybackManifest(transcript.text, transcript.path);
+      } catch (error: unknown) {
+        if (!(error instanceof VaultNotFoundError)) throw error;
+      }
+    }
     if (!manifest) return null;
     const extension = manifest.resource.slice(manifest.resource.lastIndexOf('.') + 1).toLowerCase();
     try {
