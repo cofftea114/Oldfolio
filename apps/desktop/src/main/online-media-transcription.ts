@@ -6,6 +6,7 @@ import {
   OnlineAudioTranscriber,
   compileTranscriptDocument,
   extractEmbeddedTextSubtitle,
+  importMediaAsset,
   probeEmbeddedSubtitleTracks,
   probeMediaDuration,
   runControlledProcess,
@@ -18,7 +19,7 @@ import type { AITranscriptionResult, SourceSnapshot } from '@oldfolio/domain';
 import type { VaultRepository } from '@oldfolio/vault';
 
 import { resolveVerifiedAsset, type TranscribeMediaFileResult } from './media-transcription.js';
-import type { OnlineAIService } from './online-ai.js';
+import type { CloudTranscriptionService } from './cloud-transcription.js';
 import { downloadRemoteMediaAsset } from './remote-media.js';
 import { writeConceptOnce } from './write-concept.js';
 
@@ -35,13 +36,13 @@ export async function transcribeOnlineMediaUrl(
   repository: VaultRepository,
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
-  onlineAI: OnlineAIService,
+  cloudTranscription: CloudTranscriptionService,
   input: { readonly url: string; readonly language?: string },
   options: OnlineMediaTranscriptionOptions = {},
 ): Promise<TranscribeMediaFileResult> {
   const config = await deviceConfig.load();
   if (!config.ffmpegPath) throw new Error('在线转录仍需要本机 FFmpeg 来提取受控音频分块。');
-  const runtime = await onlineAI.runtime(options.signal);
+  const runtime = await cloudTranscription.runtime(options.signal);
   const asset = await downloadRemoteMediaAsset(input.url, repository.root, {
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
@@ -51,24 +52,61 @@ export async function transcribeOnlineMediaUrl(
     sourceHash: asset.contentHash,
     request: {
       kind: 'online_transcription',
+      sourceKind: 'remote-url',
       sourceTitle: asset.originalName,
       importedFrom: asset.finalUrl,
-      providerId: 'openai-compatible',
+      providerId: runtime.config.providerId as 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr',
       endpointHost: runtime.host,
       transcriptionModel: runtime.transcriptionModel,
       secretRef: runtime.config.secretRef ?? '',
+      inputMode: runtime.inputMode,
       ...(input.language ? { language: input.language } : {}),
       chunkDurationMs: ONLINE_CHUNK_DURATION_MS,
     },
   });
-  return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, onlineAI, job.id, options);
+  return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
+}
+
+export async function transcribeCloudMediaFile(
+  repository: VaultRepository,
+  jobs: MediaJobStore,
+  deviceConfig: MediaDeviceConfigStore,
+  cloudTranscription: CloudTranscriptionService,
+  input: { readonly mediaPath: string; readonly language?: string },
+  options: OnlineMediaTranscriptionOptions = {},
+): Promise<TranscribeMediaFileResult> {
+  const config = await deviceConfig.load();
+  if (!config.ffmpegPath) throw new Error('请先配置 FFmpeg，用于字幕检测和受控音频分块。');
+  const runtime = await cloudTranscription.runtime(options.signal);
+  if (runtime.inputMode === 'remote-url') {
+    throw new Error('通义听悟官方离线转写 API 不接收本地文件；请使用公开 HTTPS 直链，或改选 OpenAI-compatible / 腾讯云。');
+  }
+  const asset = await importMediaAsset(input.mediaPath, repository.root);
+  const job = await jobs.create({
+    sourceUri: asset.vaultPath,
+    sourceHash: asset.contentHash,
+    request: {
+      kind: 'online_transcription',
+      sourceKind: 'local-file',
+      sourceTitle: asset.originalName,
+      importedFrom: input.mediaPath,
+      providerId: runtime.config.providerId as 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr',
+      endpointHost: runtime.host,
+      transcriptionModel: runtime.transcriptionModel,
+      secretRef: runtime.config.secretRef ?? '',
+      inputMode: runtime.inputMode,
+      ...(input.language ? { language: input.language } : {}),
+      chunkDurationMs: ONLINE_CHUNK_DURATION_MS,
+    },
+  });
+  return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
 }
 
 export async function resumeOnlineMediaTranscription(
   repository: VaultRepository,
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
-  onlineAI: OnlineAIService,
+  cloudTranscription: CloudTranscriptionService,
   jobId: string,
   options: OnlineMediaTranscriptionOptions = {},
 ): Promise<TranscribeMediaFileResult> {
@@ -81,11 +119,13 @@ export async function resumeOnlineMediaTranscription(
   try {
     const config = await deviceConfig.load();
     if (!config.ffmpegPath) throw new Error('在线转录仍需要本机 FFmpeg。');
-    const runtime = await onlineAI.runtime(options.signal);
+    const runtime = await cloudTranscription.runtime(options.signal);
     if (
       runtime.host !== request.endpointHost
+      || runtime.config.providerId !== request.providerId
       || runtime.transcriptionModel !== request.transcriptionModel
       || runtime.config.secretRef !== request.secretRef
+      || runtime.inputMode !== request.inputMode
     ) throw new Error('在线转录配置已变化，请恢复原服务与模型后重试。');
     const asset = await resolveVerifiedAsset(repository.root, job);
     const runner = options.run ?? runControlledProcess;
@@ -111,17 +151,29 @@ export async function resumeOnlineMediaTranscription(
       } catch (error: unknown) {
         if (options.signal?.aborted) throw error;
         transcript = await transcribeWithOnlineProvider();
-        generator = `openai-compatible:${request.transcriptionModel}`;
+        generator = `${request.providerId}:${request.transcriptionModel}`;
         transcriptSource = 'speech_recognition';
       }
     } else {
       transcript = await transcribeWithOnlineProvider();
-      generator = `openai-compatible:${request.transcriptionModel}`;
+      generator = `${request.providerId}:${request.transcriptionModel}`;
       transcriptSource = 'speech_recognition';
     }
 
     async function transcribeWithOnlineProvider(): Promise<AITranscriptionResult> {
       const durationMs = await probeMediaDuration(asset.absolutePath, config.ffmpegPath!, runner, options.signal);
+      if (request.inputMode === 'remote-url') {
+        if (!runtime.provider.transcribe) throw new Error('当前云转录 Provider 不支持音视频转写。');
+        await jobs.checkpoint(job.id, 'transcribing', 0.2, { chunkIndex: 0, chunkCount: 1 });
+        const result = await runtime.provider.transcribe(runtime.config, {
+          model: request.transcriptionModel,
+          mediaUri: request.importedFrom,
+          durationMs,
+          ...(request.language ? { language: request.language } : {}),
+        }, runtime.context);
+        await jobs.checkpoint(job.id, 'transcribing', 0.8, { chunkIndex: 0, chunkCount: 1 });
+        return result;
+      }
       const chunks = Math.ceil(durationMs / request.chunkDurationMs);
       const completedChunks = job.checkpoints.flatMap((checkpoint) => (
         checkpoint.stage === 'transcribing' && checkpoint.chunkIndex !== undefined && checkpoint.artifactHash
@@ -160,10 +212,11 @@ export async function resumeOnlineMediaTranscription(
     await jobs.checkpoint(job.id, 'compiling', 0.85, { transcriptSegments: transcript.segments });
     const fetchedAt = now().toISOString();
     const sourceId = `media-${job.sourceHash}`;
+    const localSource = request.sourceKind === 'local-file';
     const snapshot: SourceSnapshot = {
       id: sourceId,
-      connectorId: 'org.oldfolio.remote-media',
-      canonicalUri: request.importedFrom,
+      connectorId: localSource ? 'org.oldfolio.local-media' : 'org.oldfolio.remote-media',
+      canonicalUri: localSource ? job.sourceUri : request.importedFrom,
       fetchedAt,
       contentHash: job.sourceHash,
       title: request.sourceTitle,
@@ -172,6 +225,7 @@ export async function resumeOnlineMediaTranscription(
         byteLength: asset.byteLength,
         importedFrom: request.importedFrom,
         transcriptSource,
+        onlineProvider: request.providerId,
         onlineProviderHost: request.endpointHost,
         transcriptionModel: request.transcriptionModel,
         subtitleTracks: subtitleTracks.map((track) => ({

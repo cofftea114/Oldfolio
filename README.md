@@ -83,10 +83,12 @@ burned-in subtitles require a future OCR pipeline.
 5. Review the generated OKF `Synthesis` document and diff. Nothing is written until **Approve and
    write to Vault** is selected; the resulting write can be atomically undone while unchanged.
 
-LM Studio uses its native v1 chat API with reasoning disabled for schema-bound knowledge tasks. For
-online use, choose **Online OpenAI-compatible**, enter an HTTPS `/v1/` endpoint and API Key, explicitly
-confirm the destination host, detect a chat model, enter a transcription model, and save. Endpoint and
-model names are device-local. Until native OS credential storage is implemented, the API Key exists
+LM Studio uses its native v1 chat API with reasoning disabled for schema-bound knowledge tasks. The AI
+workspace keeps **Transcription** and **Summary** as independent modules, and each can select local or
+online execution. Online summary presets are available for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok,
+Qwen, and Gemini; the endpoint and model remain editable for compatible regional or custom endpoints.
+Explicitly confirm the destination host before saving. Endpoint and model names are device-local. Until
+native OS credential storage is implemented, the API Key exists
 only in main-process memory for the current application run and must be entered again after restart;
 it is never written to the Vault, SQLite index, device config, or logs.
 
@@ -94,13 +96,16 @@ it is never written to the Vault, SQLite index, device config, or logs.
 
 1. Configure FFmpeg under **Local transcription**. `whisper-cli` and a GGML model are not required for
    online speech transcription.
-2. Configure an online OpenAI-compatible chat and audio-transcription service as described above.
+2. In **Transcription**, choose OpenAI-compatible transcription, Alibaba Cloud Tingwu, or Tencent Cloud
+   recording-file recognition. OpenAI-compatible transcription reuses the explicitly confirmed online
+   endpoint/key but has its own model selection. Tingwu accepts only a server-accessible public URL;
+   Tencent receives local 64-kbps AAC chunks kept below its raw-data request limit.
 3. Paste a public direct HTTPS media URL such as an `.mp4`, `.m4a`, or `.mp3` URL under **Online media**.
    Web pages, platform share pages, authenticated URLs, private-network targets, embedded credentials,
    hidden APIs, and Cookie extraction are intentionally unsupported.
 4. Oldfolio streams at most 2 GB into a content-addressed Vault asset. It first extracts a supported
    embedded text subtitle locally. If none is available, FFmpeg creates bounded audio chunks and the
-   configured transcription model receives only those chunks. Completed chunk artifacts are hashed so
+   configured chunk-capable provider receives only those chunks. Completed chunk artifacts are hashed so
    interrupted jobs can continue without retranscribing verified chunks.
 5. Open the generated Transcript, choose the online summary target, inspect the complete document and
    destination disclosure, then confirm generation. The provider is contacted directly from the device;

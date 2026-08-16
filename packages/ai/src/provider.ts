@@ -30,6 +30,8 @@ export interface ProviderOptions {
     uri: string,
     signal?: AbortSignal,
   ) => Promise<{ readonly bytes: Uint8Array; readonly fileName: string; readonly mimeType: string }>;
+  /** Some OpenAI-compatible services support JSON objects but not strict JSON Schema response formats. */
+  readonly structuredOutputMode?: 'json-schema' | 'json-object';
 }
 
 export class AIProviderError extends Error {
@@ -247,7 +249,9 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
             ? request.responseFormat === 'json'
               ? { response_format: { type: 'json_object' } }
               : {}
-            : {
+            : this.options.structuredOutputMode === 'json-object'
+              ? { response_format: { type: 'json_object' } }
+              : {
                 response_format: {
                   type: 'json_schema',
                   json_schema: { name: 'oldfolio_response', schema: request.responseSchema, strict: true },

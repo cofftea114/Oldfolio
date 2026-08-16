@@ -7,8 +7,26 @@ import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfoli
 
 const ONLINE_SECRET_REF = 'session:online-openai-compatible';
 
+export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
+
+export const ONLINE_SUMMARY_PRESETS: Readonly<Record<Exclude<OnlineSummaryPreset, 'custom'>, {
+  readonly endpoint: string;
+  readonly model: string;
+  readonly label: string;
+}>> = {
+  openai: { endpoint: 'https://api.openai.com/v1/', model: 'gpt-5-mini', label: 'OpenAI' },
+  deepseek: { endpoint: 'https://api.deepseek.com/v1/', model: 'deepseek-chat', label: 'DeepSeek' },
+  kimi: { endpoint: 'https://api.moonshot.ai/v1/', model: 'kimi-k2.6', label: 'Kimi' },
+  glm: { endpoint: 'https://open.bigmodel.cn/api/paas/v4/', model: 'glm-5.2', label: 'GLM' },
+  minimax: { endpoint: 'https://api.minimaxi.com/v1/', model: 'MiniMax-M2.7', label: 'MiniMax' },
+  grok: { endpoint: 'https://api.x.ai/v1/', model: 'grok-4.5', label: 'Grok' },
+  qwen: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/', model: 'qwen3.7-plus', label: 'Qwen' },
+  gemini: { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.6-flash', label: 'Gemini' },
+};
+
 export interface OnlineAIConfig {
   readonly version: 1;
+  readonly preset: OnlineSummaryPreset;
   readonly endpoint: string;
   readonly confirmedHost: string;
   readonly chatModel: string;
@@ -22,9 +40,10 @@ export interface OnlineAISettings extends OnlineAIConfig {
 }
 
 export interface ConfigureOnlineAIInput {
+  readonly preset?: OnlineSummaryPreset;
   readonly endpoint: string;
   readonly chatModel: string;
-  readonly transcriptionModel: string;
+  readonly transcriptionModel?: string;
   readonly apiKey: string;
   readonly hostConfirmed: boolean;
 }
@@ -44,6 +63,7 @@ export type OnlineMediaReader = (
 
 const DEFAULT_CONFIG: OnlineAIConfig = {
   version: 1,
+  preset: 'openai',
   endpoint: 'https://api.openai.com/v1/',
   confirmedHost: 'api.openai.com',
   chatModel: '',
@@ -81,11 +101,16 @@ function parseConfig(source: string): OnlineAIConfig {
     || value.secretRef !== ONLINE_SECRET_REF
   ) throw new Error('在线 AI 设备配置无效。');
   const endpoint = normalizeOnlineAIEndpoint(value.endpoint, true);
+  const preset = typeof value.preset === 'string' && ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini'].includes(value.preset)
+    ? value.preset
+    : Object.entries(ONLINE_SUMMARY_PRESETS).find(([, item]) => new URL(item.endpoint).hostname === endpoint.hostname)?.[0] as OnlineSummaryPreset | undefined
+      ?? 'custom';
   if (endpoint.hostname.toLowerCase() !== value.confirmedHost.toLowerCase()) {
     throw new Error('在线 AI 配置的已确认域名不匹配。');
   }
   return {
     version: 1,
+    preset,
     endpoint: endpoint.href,
     confirmedHost: endpoint.hostname.toLowerCase(),
     chatModel: value.chatModel.trim(),
@@ -151,14 +176,14 @@ export class OnlineAIService {
     const config = await this.configStore.load();
     return {
       ...config,
-      configured: Boolean(config.chatModel && config.transcriptionModel),
+      configured: Boolean(config.chatModel),
       keyAvailable: Boolean(this.secrets.get(config.secretRef)),
     };
   }
 
   async probe(endpoint: string, apiKey: string, hostConfirmed: boolean): Promise<readonly { id: string; displayName: string }[]> {
     const url = normalizeOnlineAIEndpoint(endpoint, hostConfirmed);
-    const provider = this.provider(url);
+    const provider = this.provider(url, 'custom');
     this.secrets.set(ONLINE_SECRET_REF, apiKey);
     try {
       const models = await provider.listModels({
@@ -173,13 +198,17 @@ export class OnlineAIService {
 
   async configure(input: ConfigureOnlineAIInput): Promise<OnlineAISettings> {
     const endpoint = normalizeOnlineAIEndpoint(input.endpoint, input.hostConfirmed);
+    const transcriptionModel = input.transcriptionModel?.trim()
+      ? boundedModel(input.transcriptionModel, '在线转录模型')
+      : (await this.configStore.load()).transcriptionModel;
     this.secrets.set(ONLINE_SECRET_REF, input.apiKey);
     const config: OnlineAIConfig = {
       version: 1,
+      preset: input.preset ?? 'custom',
       endpoint: endpoint.href,
       confirmedHost: endpoint.hostname.toLowerCase(),
       chatModel: boundedModel(input.chatModel, '在线总结模型'),
-      transcriptionModel: boundedModel(input.transcriptionModel, '在线转录模型'),
+      transcriptionModel,
       secretRef: ONLINE_SECRET_REF,
     };
     try {
@@ -191,13 +220,13 @@ export class OnlineAIService {
     }
   }
 
-  async runtime(signal?: AbortSignal): Promise<OnlineAIRuntime> {
+  async summaryRuntime(signal?: AbortSignal): Promise<OnlineAIRuntime> {
     const config = await this.configStore.load();
-    if (!config.chatModel || !config.transcriptionModel) throw new Error('请先配置在线 AI 服务与模型。');
+    if (!config.chatModel) throw new Error('请先配置在线摘要服务与模型。');
     if (!this.secrets.get(config.secretRef)) throw new Error('在线 API Key 只保留在当前会话，请重新输入并连接。');
     const endpoint = normalizeOnlineAIEndpoint(config.endpoint, true);
     return {
-      provider: this.provider(endpoint),
+      provider: this.provider(endpoint, config.preset),
       config: {
         providerId: 'openai-compatible', endpoint: endpoint.href, model: config.chatModel, secretRef: config.secretRef,
       },
@@ -207,15 +236,29 @@ export class OnlineAIService {
     };
   }
 
+  async transcriptionRuntime(model: string, signal?: AbortSignal): Promise<OnlineAIRuntime> {
+    const runtime = await this.summaryRuntime(signal);
+    return {
+      ...runtime,
+      transcriptionModel: boundedModel(model, '在线转录模型'),
+      config: { ...runtime.config, model: boundedModel(model, '在线转录模型') },
+    };
+  }
+
+  runtime(signal?: AbortSignal): Promise<OnlineAIRuntime> {
+    return this.summaryRuntime(signal);
+  }
+
   clearSessionKey(): void {
     this.secrets.clear();
   }
 
-  private provider(endpoint: URL): OpenAICompatibleProvider {
+  private provider(endpoint: URL, preset: OnlineSummaryPreset): OpenAICompatibleProvider {
     return new OpenAICompatibleProvider({
       endpointPolicy: { confirmedHosts: [endpoint.hostname] },
       fetch: this.fetchImplementation,
       readMedia: this.readMedia,
+      structuredOutputMode: preset === 'openai' || preset === 'grok' || preset === 'gemini' || preset === 'custom' ? 'json-schema' : 'json-object',
     });
   }
 
@@ -226,4 +269,3 @@ export class OnlineAIService {
     };
   }
 }
-

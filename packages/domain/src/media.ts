@@ -34,12 +34,14 @@ export interface LocalMediaTranscriptionRequest {
 
 export interface OnlineMediaTranscriptionRequest {
   readonly kind: 'online_transcription';
+  readonly sourceKind?: 'local-file' | 'remote-url';
   readonly sourceTitle: string;
   readonly importedFrom: string;
-  readonly providerId: 'openai-compatible';
+  readonly providerId: 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr';
   readonly endpointHost: string;
   readonly transcriptionModel: string;
   readonly secretRef: string;
+  readonly inputMode: 'chunks' | 'remote-url';
   readonly language?: string;
   readonly chunkDurationMs: number;
 }

@@ -16,6 +16,7 @@ import { AIDeviceConfigStore } from './ai-device-config.js';
 import { AISummaryService, createLocalAIProviderResolver } from './ai-summary.js';
 import { importCaptionFile } from './caption-import.js';
 import { DocumentLifecycleService } from './document-lifecycle.js';
+import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './cloud-transcription.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
@@ -24,7 +25,8 @@ import {
   OnlineAIService,
   SessionSecretStore,
 } from './online-ai.js';
-import { resumeOnlineMediaTranscription, transcribeOnlineMediaUrl } from './online-media-transcription.js';
+import type { OnlineSummaryPreset } from './online-ai.js';
+import { resumeOnlineMediaTranscription, transcribeCloudMediaFile, transcribeOnlineMediaUrl } from './online-media-transcription.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -41,6 +43,7 @@ let aiDeviceConfig: AIDeviceConfigStore | null = null;
 let aiSummary: AISummaryService | null = null;
 let documentLifecycle: DocumentLifecycleService | null = null;
 let onlineAI: OnlineAIService | null = null;
+let cloudTranscription: CloudTranscriptionService | null = null;
 const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
@@ -98,6 +101,11 @@ function requireDocumentLifecycle(): DocumentLifecycleService {
 function requireOnlineAI(): OnlineAIService {
   if (!onlineAI) throw new Error('在线 AI 服务尚未初始化');
   return onlineAI;
+}
+
+function requireCloudTranscription(): CloudTranscriptionService {
+  if (!cloudTranscription) throw new Error('云转录服务尚未初始化');
+  return cloudTranscription;
 }
 
 async function readControlledOnlineAudio(uri: string): Promise<{
@@ -450,12 +458,46 @@ function registerIpc(): void {
         requireRepository(),
         requireMediaJobs(),
         requireMediaDeviceConfig(),
-        requireOnlineAI(),
+        requireCloudTranscription(),
         {
           url: value.url.trim(),
           ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
         },
         { fetcher: chromiumNetworkFetch, signal: controller.signal },
+      );
+      return {
+        cancelled: false,
+        jobId: result.jobId,
+        transcriptSource: result.transcriptSource,
+        transcript: await readDocument(result.transcriptPath),
+      };
+    } finally {
+      activeMediaTasks.delete(controller);
+    }
+  });
+  ipcMain.handle('media:transcribe-cloud-file', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid cloud transcription request');
+    const value = input as Record<string, unknown>;
+    if (value.language !== undefined && typeof value.language !== 'string') throw new TypeError('Invalid transcription language');
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择本地音视频发送到在线转录服务',
+      properties: ['openFile'],
+      filters: [{ name: '音视频', extensions: ['aac', 'flac', 'm4a', 'mkv', 'mov', 'mp3', 'mp4', 'mpeg', 'mpg', 'ogg', 'opus', 'wav', 'webm'] }],
+      buttonLabel: '开始在线转录',
+    });
+    const mediaPath = selection.filePaths[0];
+    if (selection.canceled || !mediaPath) return { cancelled: true };
+    const controller = new AbortController();
+    activeMediaTasks.add(controller);
+    try {
+      const result = await transcribeCloudMediaFile(
+        requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(),
+        {
+          mediaPath,
+          ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+        },
+        { signal: controller.signal },
       );
       return {
         cancelled: false,
@@ -497,7 +539,7 @@ function registerIpc(): void {
       const job = await requireMediaJobs().get(jobId);
       const result = job.request?.kind === 'online_transcription'
         ? await resumeOnlineMediaTranscription(
-            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireOnlineAI(), jobId,
+            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(), jobId,
             { signal: controller.signal },
           )
         : await resumeMediaTranscription(
@@ -550,6 +592,10 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return requireOnlineAI().settings();
   });
+  ipcMain.handle('ai:get-cloud-transcription-settings', async (event) => {
+    assertTrustedSender(event);
+    return requireCloudTranscription().settings();
+  });
   ipcMain.handle('ai:probe-provider', async (event, input: unknown) => {
     assertTrustedSender(event);
     if (typeof input !== 'object' || input === null) throw new TypeError('Invalid local AI probe');
@@ -587,16 +633,46 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>;
     if (
       typeof value.endpoint !== 'string' || typeof value.apiKey !== 'string'
-      || typeof value.chatModel !== 'string' || typeof value.transcriptionModel !== 'string'
+      || typeof value.chatModel !== 'string'
+      || (value.transcriptionModel !== undefined && typeof value.transcriptionModel !== 'string')
       || typeof value.hostConfirmed !== 'boolean'
     ) throw new TypeError('Invalid online AI settings');
+    const presets = ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini'] as const;
+    if (value.preset !== undefined && !presets.includes(value.preset as typeof presets[number])) {
+      throw new TypeError('Invalid online AI preset');
+    }
     return requireOnlineAI().configure({
+      ...(typeof value.preset === 'string' ? { preset: value.preset as OnlineSummaryPreset } : {}),
       endpoint: value.endpoint,
       apiKey: value.apiKey,
       chatModel: value.chatModel,
-      transcriptionModel: value.transcriptionModel,
+      ...(typeof value.transcriptionModel === 'string' ? { transcriptionModel: value.transcriptionModel } : {}),
       hostConfirmed: value.hostConfirmed,
     });
+  });
+  ipcMain.handle('ai:save-cloud-transcription-settings', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid cloud transcription settings');
+    const value = input as Record<string, unknown>;
+    if (value.providerId === 'openai-compatible' && typeof value.model === 'string') {
+      return requireCloudTranscription().configure({ providerId: value.providerId, model: value.model });
+    }
+    if (
+      value.providerId === 'aliyun-tingwu' && typeof value.region === 'string'
+      && typeof value.sourceLanguage === 'string' && typeof value.accessKeyId === 'string'
+      && typeof value.accessKeySecret === 'string' && typeof value.appKey === 'string'
+    ) return requireCloudTranscription().configure({
+      providerId: value.providerId, region: value.region, sourceLanguage: value.sourceLanguage,
+      accessKeyId: value.accessKeyId, accessKeySecret: value.accessKeySecret, appKey: value.appKey,
+    });
+    if (
+      value.providerId === 'tencent-asr' && typeof value.region === 'string'
+      && typeof value.engineModelType === 'string' && typeof value.secretId === 'string' && typeof value.secretKey === 'string'
+    ) return requireCloudTranscription().configure({
+      providerId: value.providerId, region: value.region, engineModelType: value.engineModelType,
+      secretId: value.secretId, secretKey: value.secretKey,
+    });
+    throw new TypeError('Invalid cloud transcription settings');
   });
   ipcMain.handle('ai:prepare-summary', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -673,7 +749,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'getAISettings', 'getOnlineAISettings', 'prepareAISummary', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;
@@ -736,9 +812,17 @@ function createWindow(): void {
 void app.whenReady().then(() => {
   mediaDeviceConfig = new MediaDeviceConfigStore(join(app.getPath('userData'), 'device', 'media.json'));
   aiDeviceConfig = new AIDeviceConfigStore(join(app.getPath('userData'), 'device', 'ai.json'));
+  const sessionSecrets = new SessionSecretStore();
   onlineAI = new OnlineAIService(
     new OnlineAIConfigStore(join(app.getPath('userData'), 'device', 'online-ai.json')),
-    new SessionSecretStore(),
+    sessionSecrets,
+    chromiumNetworkFetch,
+    readControlledOnlineAudio,
+  );
+  cloudTranscription = new CloudTranscriptionService(
+    new CloudTranscriptionConfigStore(join(app.getPath('userData'), 'device', 'cloud-transcription.json')),
+    sessionSecrets,
+    onlineAI,
     chromiumNetworkFetch,
     readControlledOnlineAudio,
   );

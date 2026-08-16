@@ -56,9 +56,12 @@ claim that the planned 9–12 month v1 is complete.
   follows the transcript's Chinese/English language, and uses one representative playback anchor per viewpoint;
   original evidence IDs remain validated at every step. Preview the complete OKF `Synthesis` content and diff,
   and apply or undo the resulting L1/L2 change set.
-- Configure an HTTPS OpenAI-compatible endpoint for online transcription and summary. The user must
-  explicitly confirm the destination host and can inspect the complete summary working document before
-  it is sent. Only endpoint, confirmed host, model names, and an opaque secret reference are serialized.
+- Configure transcription and summary independently for local or online execution. Online summaries
+  provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
+  Gemini. Online transcription supports OpenAI-compatible audio models, Alibaba Cloud Tingwu's public-URL
+  offline task protocol, and Tencent Cloud recording-file recognition with signed asynchronous polling.
+  The user must explicitly confirm the summary destination host and can inspect the complete summary
+  working document before it is sent. Only endpoints, provider/model settings, and opaque secret references are serialized.
   The current API Key implementation is deliberately session-only main-process memory: it is cleared
   on exit and never written to the Vault, SQLite, ordinary config, or logs.
 - Validate plugin manifests and broker declared first-party SDK capabilities.

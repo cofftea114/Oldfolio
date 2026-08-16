@@ -129,6 +129,7 @@ export type AISummaryExecutionTarget = 'local' | 'online';
 
 export interface OnlineAISettingsSummary {
   version: 1;
+  preset: OnlineSummaryPreset;
   endpoint: string;
   confirmedHost: string;
   chatModel: string;
@@ -136,6 +137,21 @@ export interface OnlineAISettingsSummary {
   secretRef: string;
   configured: boolean;
   keyAvailable: boolean;
+}
+
+export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
+export type CloudTranscriptionProviderId = 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr';
+
+export interface CloudTranscriptionSettingsSummary {
+  version: 1;
+  providerId: CloudTranscriptionProviderId;
+  model: string;
+  region: string;
+  secretRef: string;
+  configured: boolean;
+  credentialAvailable: boolean;
+  endpointHost: string;
+  inputMode: 'chunks' | 'remote-url';
 }
 
 export interface AIModelSummary {
@@ -214,12 +230,14 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  transcribeCloudMedia(input: { language?: string }): Promise<MediaTranscriptionResult>;
   transcribeOnlineMedia(input: { url: string; language?: string }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
   getAISettings(): Promise<AISettingsSummary>;
   getOnlineAISettings(): Promise<OnlineAISettingsSummary>;
+  getCloudTranscriptionSettings(): Promise<CloudTranscriptionSettingsSummary>;
   probeLocalAI(input: { providerId: AILocalProviderId; endpoint: string }): Promise<AIModelSummary[]>;
   probeOnlineAI(input: {
     endpoint: string;
@@ -232,12 +250,18 @@ export interface OldfolioDesktopApi {
     model: string;
   }): Promise<AISettingsSummary>;
   saveOnlineAISettings(input: {
+    preset?: OnlineSummaryPreset;
     endpoint: string;
     chatModel: string;
-    transcriptionModel: string;
+    transcriptionModel?: string;
     apiKey: string;
     hostConfirmed: boolean;
   }): Promise<OnlineAISettingsSummary>;
+  saveCloudTranscriptionSettings(input:
+    | { providerId: 'openai-compatible'; model: string }
+    | { providerId: 'aliyun-tingwu'; region: string; sourceLanguage: string; accessKeyId: string; accessKeySecret: string; appKey: string }
+    | { providerId: 'tencent-asr'; region: string; engineModelType: string; secretId: string; secretKey: string }
+  ): Promise<CloudTranscriptionSettingsSummary>;
   prepareAISummary(path: string, executionTarget: AISummaryExecutionTarget): Promise<AISummaryPreparation>;
   generateAISummary(input: {
     path: string;

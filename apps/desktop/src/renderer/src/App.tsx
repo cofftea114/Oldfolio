@@ -15,7 +15,6 @@ import {
   Radio,
   RotateCcw,
   Search,
-  Settings2,
   Sparkles,
   Tags,
   Trash2,
@@ -30,10 +29,13 @@ import type {
   AISummaryExecutionTarget,
   AISummaryPreparation,
   AISummaryTemplate,
+  CloudTranscriptionProviderId,
+  CloudTranscriptionSettingsSummary,
   DocumentSummary,
   MediaJobSummary,
   MediaSettingsSummary,
   OnlineAISettingsSummary,
+  OnlineSummaryPreset,
   SearchHit,
   TranscriptPlaybackSummary,
   VaultDocument,
@@ -66,6 +68,18 @@ const LOCAL_AI_DEFAULT_ENDPOINTS: Readonly<Record<AILocalProviderId, string>> = 
   'openai-compatible': 'http://127.0.0.1:1234/api/v1/',
 };
 
+const ONLINE_SUMMARY_PRESETS: Readonly<Record<OnlineSummaryPreset, { label: string; endpoint: string; model: string }>> = {
+  openai: { label: 'OpenAI', endpoint: 'https://api.openai.com/v1/', model: 'gpt-5-mini' },
+  deepseek: { label: 'DeepSeek', endpoint: 'https://api.deepseek.com/v1/', model: 'deepseek-chat' },
+  kimi: { label: 'Kimi', endpoint: 'https://api.moonshot.ai/v1/', model: 'kimi-k2.6' },
+  glm: { label: 'GLM', endpoint: 'https://open.bigmodel.cn/api/paas/v4/', model: 'glm-5.2' },
+  minimax: { label: 'MiniMax', endpoint: 'https://api.minimaxi.com/v1/', model: 'MiniMax-M2.7' },
+  grok: { label: 'Grok', endpoint: 'https://api.x.ai/v1/', model: 'grok-4.5' },
+  qwen: { label: 'Qwen / 通义千问', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/', model: 'qwen3.7-plus' },
+  gemini: { label: 'Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.6-flash' },
+  custom: { label: '自定义 OpenAI-compatible', endpoint: '', model: '' },
+};
+
 function endpointHost(endpoint: string): string {
   try {
     return new URL(endpoint).host;
@@ -88,7 +102,6 @@ export function App() {
   const [feedUrl, setFeedUrl] = useState('');
   const [importError, setImportError] = useState('');
   const [importing, setImporting] = useState(false);
-  const [mediaSettingsOpen, setMediaSettingsOpen] = useState(false);
   const [mediaSettings, setMediaSettings] = useState<MediaSettingsSummary | null>(null);
   const [mediaJobs, setMediaJobs] = useState<MediaJobSummary[]>([]);
   const [modelId, setModelId] = useState('base');
@@ -106,13 +119,26 @@ export function App() {
   const [aiModels, setAIModels] = useState<AIModelSummary[]>([]);
   const [aiModel, setAIModel] = useState('');
   const [aiExecutionTarget, setAIExecutionTarget] = useState<AISummaryExecutionTarget>('local');
+  const [transcriptionExecutionTarget, setTranscriptionExecutionTarget] = useState<AISummaryExecutionTarget>('local');
   const [onlineAISettings, setOnlineAISettings] = useState<OnlineAISettingsSummary | null>(null);
+  const [onlineSummaryPreset, setOnlineSummaryPreset] = useState<OnlineSummaryPreset>('openai');
   const [onlineAIEndpoint, setOnlineAIEndpoint] = useState('https://api.openai.com/v1/');
   const [onlineAPIKey, setOnlineAPIKey] = useState('');
   const [onlineHostConfirmed, setOnlineHostConfirmed] = useState(false);
   const [onlineModels, setOnlineModels] = useState<AIModelSummary[]>([]);
   const [onlineChatModel, setOnlineChatModel] = useState('');
   const [onlineTranscriptionModel, setOnlineTranscriptionModel] = useState('gpt-4o-mini-transcribe');
+  const [cloudTranscriptionSettings, setCloudTranscriptionSettings] = useState<CloudTranscriptionSettingsSummary | null>(null);
+  const [cloudTranscriptionProvider, setCloudTranscriptionProvider] = useState<CloudTranscriptionProviderId>('openai-compatible');
+  const [aliyunRegion, setAliyunRegion] = useState('cn-beijing');
+  const [aliyunLanguage, setAliyunLanguage] = useState('auto');
+  const [aliyunAccessKeyId, setAliyunAccessKeyId] = useState('');
+  const [aliyunAccessKeySecret, setAliyunAccessKeySecret] = useState('');
+  const [aliyunAppKey, setAliyunAppKey] = useState('');
+  const [tencentRegion, setTencentRegion] = useState('ap-guangzhou');
+  const [tencentEngine, setTencentEngine] = useState('16k_zh_en');
+  const [tencentSecretId, setTencentSecretId] = useState('');
+  const [tencentSecretKey, setTencentSecretKey] = useState('');
   const [onlineMediaUrl, setOnlineMediaUrl] = useState('');
   const [aiBusy, setAIBusy] = useState(false);
   const [aiError, setAIError] = useState('');
@@ -246,9 +272,10 @@ export function App() {
     if (!next || !vault) return;
     setAIError('');
     try {
-      const [settings, onlineSettings, currentMediaSettings] = await Promise.all([
+      const [settings, onlineSettings, cloudSettings, currentMediaSettings] = await Promise.all([
         window.oldfolio.getAISettings(),
         window.oldfolio.getOnlineAISettings(),
+        window.oldfolio.getCloudTranscriptionSettings(),
         window.oldfolio.getMediaSettings(),
       ]);
       setAISettings(settings);
@@ -256,9 +283,21 @@ export function App() {
       setAIEndpoint(settings.endpoint);
       setAIModel(settings.model);
       setOnlineAISettings(onlineSettings);
+      setOnlineSummaryPreset(onlineSettings.preset);
       setOnlineAIEndpoint(onlineSettings.endpoint);
       setOnlineChatModel(onlineSettings.chatModel);
       setOnlineTranscriptionModel(onlineSettings.transcriptionModel || 'gpt-4o-mini-transcribe');
+      setCloudTranscriptionSettings(cloudSettings);
+      setCloudTranscriptionProvider(cloudSettings.providerId);
+      if (cloudSettings.providerId === 'openai-compatible') setOnlineTranscriptionModel(cloudSettings.model);
+      if (cloudSettings.providerId === 'aliyun-tingwu') {
+        setAliyunRegion(cloudSettings.region || 'cn-beijing');
+        setAliyunLanguage(cloudSettings.model || 'auto');
+      }
+      if (cloudSettings.providerId === 'tencent-asr') {
+        setTencentRegion(cloudSettings.region || 'ap-guangzhou');
+        setTencentEngine(cloudSettings.model || '16k_zh_en');
+      }
       setOnlineHostConfirmed(false);
       setMediaSettings(currentMediaSettings);
     } catch (error: unknown) {
@@ -323,14 +362,14 @@ export function App() {
   };
 
   const saveOnlineAISettings = async () => {
-    if (!onlineChatModel.trim() || !onlineTranscriptionModel.trim() || !onlineAPIKey.trim()) return;
+    if (!onlineChatModel.trim() || !onlineAPIKey.trim()) return;
     setAIBusy(true);
     setAIError('');
     try {
       const settings = await window.oldfolio.saveOnlineAISettings({
+        preset: onlineSummaryPreset,
         endpoint: onlineAIEndpoint,
         chatModel: onlineChatModel,
-        transcriptionModel: onlineTranscriptionModel,
         apiKey: onlineAPIKey,
         hostConfirmed: onlineHostConfirmed,
       });
@@ -342,6 +381,45 @@ export function App() {
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法保存在线 AI 配置');
       setStatus('在线 AI 配置失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const saveCloudTranscriptionSettings = async () => {
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const settings = cloudTranscriptionProvider === 'openai-compatible'
+        ? await window.oldfolio.saveCloudTranscriptionSettings({
+            providerId: cloudTranscriptionProvider,
+            model: onlineTranscriptionModel,
+          })
+        : cloudTranscriptionProvider === 'aliyun-tingwu'
+          ? await window.oldfolio.saveCloudTranscriptionSettings({
+              providerId: cloudTranscriptionProvider,
+              region: aliyunRegion,
+              sourceLanguage: aliyunLanguage,
+              accessKeyId: aliyunAccessKeyId,
+              accessKeySecret: aliyunAccessKeySecret,
+              appKey: aliyunAppKey,
+            })
+          : await window.oldfolio.saveCloudTranscriptionSettings({
+              providerId: cloudTranscriptionProvider,
+              region: tencentRegion,
+              engineModelType: tencentEngine,
+              secretId: tencentSecretId,
+              secretKey: tencentSecretKey,
+            });
+      setCloudTranscriptionSettings(settings);
+      setAliyunAccessKeyId('');
+      setAliyunAccessKeySecret('');
+      setAliyunAppKey('');
+      setTencentSecretId('');
+      setTencentSecretKey('');
+      setStatus('在线转录配置已保存；凭据仅保留在当前运行会话');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法保存在线转录配置');
     } finally {
       setAIBusy(false);
     }
@@ -482,18 +560,6 @@ export function App() {
     setSelectedModel((current) => current || settings.models[0]?.id || '');
   }, [vault]);
 
-  const toggleMediaSettings = async () => {
-    const next = !mediaSettingsOpen;
-    setMediaSettingsOpen(next);
-    if (next) {
-      try {
-        await refreshMedia();
-      } catch (error: unknown) {
-        setImportError(error instanceof Error ? error.message : '无法读取媒体配置');
-      }
-    }
-  };
-
   const chooseMediaTool = async (kind: 'ffmpeg' | 'whisper') => {
     setImportError('');
     try {
@@ -586,6 +652,38 @@ export function App() {
     }
   };
 
+  const transcribeCloudMedia = async () => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    setAIError('');
+    setStatus('正在准备本地媒体并发送受控音频分块…');
+    const poll = window.setInterval(() => void window.oldfolio.listMediaJobs().then(setMediaJobs), 1_000);
+    try {
+      const language = mediaLanguage.trim();
+      const result = await window.oldfolio.transcribeCloudMedia({
+        ...(language && language !== 'auto' ? { language } : {}),
+      });
+      if (result.cancelled || !result.transcript) {
+        setStatus('已取消在线转录');
+        return;
+      }
+      await loadDocuments();
+      await openDocument(result.transcript.path);
+      setStatus(result.transcriptSource === 'embedded_subtitle'
+        ? '已优先提取本地媒体的内嵌字幕'
+        : '本地媒体已由在线转录服务生成笔记');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '本地媒体在线转录失败';
+      setAIError(message);
+      setStatus('本地媒体在线转录失败');
+    } finally {
+      window.clearInterval(poll);
+      await refreshMedia();
+      setImporting(false);
+    }
+  };
+
   const retryMediaJob = async (jobId: string) => {
     if (!vault || importing) return;
     setImporting(true);
@@ -647,6 +745,10 @@ export function App() {
     () => visibleDocuments.filter((document) => document.category === 'transcript'),
     [visibleDocuments],
   );
+  const savedCloudCredentialsAvailable = cloudTranscriptionSettings?.providerId === cloudTranscriptionProvider
+    && cloudTranscriptionSettings.credentialAvailable;
+  const aliyunCredentialCount = [aliyunAccessKeyId, aliyunAccessKeySecret, aliyunAppKey].filter((value) => value.trim()).length;
+  const tencentCredentialCount = [tencentSecretId, tencentSecretKey].filter((value) => value.trim()).length;
 
   const openWikiLink = (target: string) => {
     const pathTarget = target.split('#', 1)[0]?.replaceAll('\\', '/') ?? '';
@@ -692,11 +794,6 @@ export function App() {
           title="导入 RSS / Podcast"
           onClick={() => setImportOpen((value) => !value)}
         ><Radio /></button>
-        <button
-          className={mediaSettingsOpen ? 'rail-button active' : 'rail-button'}
-          title="本地媒体设置"
-          onClick={() => void toggleMediaSettings()}
-        ><Settings2 /></button>
         <div className="rail-spacer" />
         <button className="rail-button" title="打开 Vault" onClick={() => void openVault(false)}><FolderOpen /></button>
       </aside>
@@ -739,9 +836,20 @@ export function App() {
             </button>
           </form>
         )}
-        {mediaSettingsOpen && (
+        {aiSettingsOpen && (
           <section className="media-settings">
-            <div className="section-label"><Settings2 size={14} /> 本地转录</div>
+            <div className="section-label"><Captions size={14} /> 转录模块</div>
+            <label className="field-label">执行方式
+              <select
+                disabled={aiBusy || importing || !vault}
+                value={transcriptionExecutionTarget}
+                onChange={(event) => setTranscriptionExecutionTarget(event.target.value as AISummaryExecutionTarget)}
+              >
+                <option value="local">本地 Whisper</option>
+                <option value="online">在线语音转写</option>
+              </select>
+            </label>
+            {transcriptionExecutionTarget === 'local' ? <>
             <div className="tool-row">
               <span><strong>FFmpeg</strong><small>{mediaSettings?.ffmpeg.version ?? '未配置'}</small></span>
               <button onClick={() => void chooseMediaTool('ffmpeg')}>{mediaSettings?.ffmpeg.available ? '更换' : '选择'}</button>
@@ -774,6 +882,57 @@ export function App() {
               {importing ? '处理中…' : '选择音视频并转录'}
             </button>
             <small className="model-help-note">视频包含 ASS、SRT、mov_text 或 WebVTT 文本字幕时会优先提取；没有可用文本字幕时才运行 Whisper。</small>
+            </> : <>
+              <p className="model-help">转录和摘要互不绑定。可单独选择 OpenAI-compatible、阿里云通义听悟或腾讯云录音文件识别。</p>
+              <label className="field-label">转录服务
+                <select disabled={aiBusy || importing} value={cloudTranscriptionProvider} onChange={(event) => setCloudTranscriptionProvider(event.target.value as CloudTranscriptionProviderId)}>
+                  <option value="openai-compatible">OpenAI-compatible 转录</option>
+                  <option value="aliyun-tingwu">阿里云·通义听悟</option>
+                  <option value="tencent-asr">腾讯云·录音文件识别</option>
+                </select>
+              </label>
+              {cloudTranscriptionProvider === 'openai-compatible' && <>
+                <label className="field-label">转录模型
+                  <input value={onlineTranscriptionModel} onChange={(event) => setOnlineTranscriptionModel(event.target.value)} placeholder="gpt-4o-mini-transcribe" />
+                </label>
+                <small className="model-help-note">使用“摘要模块”在线服务中配置的 endpoint 和会话 API Key，转录模型在此独立选择。</small>
+              </>}
+              {cloudTranscriptionProvider === 'aliyun-tingwu' && <>
+                <label className="field-label">地域<input value={aliyunRegion} onChange={(event) => setAliyunRegion(event.target.value)} placeholder="cn-beijing" /></label>
+                <label className="field-label">源语言<input value={aliyunLanguage} onChange={(event) => setAliyunLanguage(event.target.value)} placeholder="auto / cn / en" /></label>
+                <label className="field-label">AccessKey ID<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 AccessKey ID'} value={aliyunAccessKeyId} onChange={(event) => setAliyunAccessKeyId(event.target.value)} /></label>
+                <label className="field-label">AccessKey Secret<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 AccessKey Secret'} type="password" value={aliyunAccessKeySecret} onChange={(event) => setAliyunAccessKeySecret(event.target.value)} /></label>
+                <label className="field-label">听悟 AppKey<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入听悟 AppKey'} type="password" value={aliyunAppKey} onChange={(event) => setAliyunAppKey(event.target.value)} /></label>
+                {savedCloudCredentialsAvailable && <small className="model-help-note">凭据已保留在主进程的当前会话中。输入框为空是安全处理，不代表配置丢失；留空再保存不会覆盖凭据。</small>}
+                <small className="model-help-note">通义听悟离线转写只接受服务端可访问的公开 HTTPS 直链；Oldfolio 不会上传本地文件到官方服务器。</small>
+              </>}
+              {cloudTranscriptionProvider === 'tencent-asr' && <>
+                <label className="field-label">地域<input value={tencentRegion} onChange={(event) => setTencentRegion(event.target.value)} placeholder="ap-guangzhou" /></label>
+                <label className="field-label">引擎模型<input value={tencentEngine} onChange={(event) => setTencentEngine(event.target.value)} placeholder="16k_zh_en" /></label>
+                <label className="field-label">SecretId<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretId'} value={tencentSecretId} onChange={(event) => setTencentSecretId(event.target.value)} /></label>
+                <label className="field-label">SecretKey<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretKey'} type="password" value={tencentSecretKey} onChange={(event) => setTencentSecretKey(event.target.value)} /></label>
+                {savedCloudCredentialsAvailable && <small className="model-help-note">凭据已安全保留在当前会话，留空再保存不会清除。</small>}
+              </>}
+              <button className="transcribe-button" disabled={aiBusy || (
+                cloudTranscriptionProvider === 'openai-compatible' ? !onlineTranscriptionModel.trim() :
+                cloudTranscriptionProvider === 'aliyun-tingwu' ? !aliyunRegion.trim() || !aliyunLanguage.trim() || (aliyunCredentialCount !== 0 && aliyunCredentialCount !== 3) || (!savedCloudCredentialsAvailable && aliyunCredentialCount !== 3) :
+                !tencentRegion.trim() || !tencentEngine.trim() || (tencentCredentialCount !== 0 && tencentCredentialCount !== 2) || (!savedCloudCredentialsAvailable && tencentCredentialCount !== 2)
+              )} onClick={() => void saveCloudTranscriptionSettings()}>保存在线转录配置</button>
+              {cloudTranscriptionSettings?.configured && <small className="model-help-note">已选：{cloudTranscriptionSettings.endpointHost} · {cloudTranscriptionSettings.model} · 凭据 {cloudTranscriptionSettings.credentialAvailable ? '本次会话可用' : '需重新输入'}</small>}
+              <div className="import-divider"><span>本地媒体</span></div>
+              <button className="transcribe-button" disabled={aiBusy || importing || !vault || cloudTranscriptionProvider === 'aliyun-tingwu' || !savedCloudCredentialsAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeCloudMedia()}>
+                {importing ? '处理中…' : '选择本地音视频并在线转录'}
+              </button>
+              {cloudTranscriptionProvider === 'aliyun-tingwu' && <small className="model-help-note">通义听悟官方离线 API 只接受公网 HTTP(S) URL，不接收本地文件。本地文件可改选 OpenAI-compatible 或腾讯云；通义听悟请使用下方公开直链。</small>}
+              <div className="import-divider"><span>在线媒体</span></div>
+              <label className="field-label">公开 HTTPS 音视频直链
+                <input disabled={aiBusy || importing || !vault} onChange={(event) => setOnlineMediaUrl(event.target.value)} placeholder="https://example.com/video.mp4" type="url" value={onlineMediaUrl} />
+              </label>
+              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeOnlineMedia()}>
+                {importing ? '处理中…' : '分析在线音视频'}
+              </button>
+              {!mediaSettings?.ffmpeg.available && <small className="model-help-note">请先切回本地转录配置 FFmpeg，用于字幕检测和受控音频分块。</small>}
+            </>}
             {mediaJobs.slice(0, 3).map((job) => (
               <div className="job-row" key={job.id}>
                 <span>{job.stage}</span><progress max="1" value={job.progress} />
@@ -787,7 +946,7 @@ export function App() {
         )}
         {aiSettingsOpen && (
           <section className="media-settings ai-settings">
-            <div className="section-label"><Sparkles size={14} /> AI 模型与在线媒体</div>
+            <div className="section-label"><Sparkles size={14} /> 摘要模块</div>
             <label className="field-label">配置类型
               <select
                 disabled={aiBusy || !vault}
@@ -843,17 +1002,33 @@ export function App() {
               </>
             ) : (
               <>
-                <p className="model-help">在线模式只支持公开的 HTTPS 音视频直链，不抓取平台页面、Cookie 或隐藏接口。音频分块和完整摘要工作文档将由你的设备直接发送给所选服务商。</p>
+                <p className="model-help">摘要可独立选择在线大模型。完整摘要工作文档由你的设备直接发给服务商，Oldfolio 不代理请求。</p>
                 {onlineAISettings?.configured && (
                   <small className="model-help-note">
                     已配置：{onlineAISettings.confirmedHost} · {onlineAISettings.chatModel} · API Key {onlineAISettings.keyAvailable ? '本次会话可用' : '需重新输入'}
                   </small>
                 )}
+                <label className="field-label">服务商预设
+                  <select disabled={aiBusy || !vault} value={onlineSummaryPreset} onChange={(event) => {
+                    const preset = event.target.value as OnlineSummaryPreset;
+                    const defaults = ONLINE_SUMMARY_PRESETS[preset];
+                    setOnlineSummaryPreset(preset);
+                    if (preset !== 'custom') {
+                      setOnlineAIEndpoint(defaults.endpoint);
+                      setOnlineChatModel(defaults.model);
+                    }
+                    setOnlineHostConfirmed(false);
+                    setOnlineModels([]);
+                  }}>
+                    {(Object.entries(ONLINE_SUMMARY_PRESETS) as Array<[OnlineSummaryPreset, { label: string }]>).map(([id, preset]) => <option key={id} value={id}>{preset.label}</option>)}
+                  </select>
+                </label>
                 <label className="field-label">OpenAI-compatible 地址
                   <input
                     disabled={aiBusy || !vault}
                     onChange={(event) => {
                       setOnlineAIEndpoint(event.target.value);
+                      setOnlineSummaryPreset('custom');
                       setOnlineHostConfirmed(false);
                       setOnlineModels([]);
                     }}
@@ -880,32 +1055,13 @@ export function App() {
                   {aiBusy ? '检测中…' : '检测在线模型'}
                 </button>
                 <label className="field-label">摘要模型
-                  <select disabled={aiBusy || onlineModels.length === 0} value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)}>
-                    {!onlineChatModel && <option value="">尚未检测模型</option>}
-                    {onlineChatModel && !onlineModels.some((model) => model.id === onlineChatModel) && <option value={onlineChatModel}>{onlineChatModel}（已保存）</option>}
-                    {onlineModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
-                  </select>
+                  <input disabled={aiBusy || !vault} list="online-summary-models" value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)} placeholder="输入或选择模型 ID" />
+                  <datalist id="online-summary-models">{onlineModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</datalist>
                 </label>
-                <label className="field-label">语音转录模型
-                  <input disabled={aiBusy || !vault} onChange={(event) => setOnlineTranscriptionModel(event.target.value)} placeholder="gpt-4o-mini-transcribe" value={onlineTranscriptionModel} />
-                </label>
-                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim() || !onlineTranscriptionModel.trim()} onClick={() => void saveOnlineAISettings()}>
+                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim()} onClick={() => void saveOnlineAISettings()}>
                   保存配置并保留本次会话 Key
                 </button>
                 <small className="model-help-note">endpoint、模型名和密钥引用保存在当前设备；API Key 只在主进程内存中保留，退出 Oldfolio 后清除，不写入 Vault、索引或日志。</small>
-                <div className="import-divider"><span>在线媒体</span></div>
-                <label className="field-label">公开 HTTPS 音视频直链
-                  <input disabled={aiBusy || importing || !vault} onChange={(event) => setOnlineMediaUrl(event.target.value)} placeholder="https://example.com/video.mp4" type="url" value={onlineMediaUrl} />
-                </label>
-                <button
-                  className="transcribe-button"
-                  disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !onlineAISettings?.configured || !onlineAISettings.keyAvailable || !mediaSettings?.ffmpeg.available}
-                  onClick={() => void transcribeOnlineMedia()}
-                >
-                  {importing ? '处理中…' : '分析在线音视频'}
-                </button>
-                {!mediaSettings?.ffmpeg.available && <small className="model-help-note">在线转录仍需在“本地媒体设置”中配置 FFmpeg，用于提取和切分音频。</small>}
-                <small className="model-help-note">若媒体含文本字幕，会先在本地提取；否则按分块发送音频到 {onlineAISettings?.confirmedHost || endpointHost(onlineAIEndpoint)}。最大下载 2 GB，可恢复已完成的转录分块。</small>
               </>
             )}
             {aiError && <p className="media-error" role="alert">{aiError}</p>}
