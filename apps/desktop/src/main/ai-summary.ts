@@ -13,7 +13,9 @@ import {
   type SummaryTemplate,
 } from '@oldfolio/ai';
 import type {
+  AIInvocationContext,
   AIProvider,
+  AIProviderConfig,
   DocumentRevision,
   WikiChangeSet,
   WikiCitation,
@@ -30,6 +32,9 @@ import {
 
 import { normalizeLocalAIEndpoint } from './ai-device-config.js';
 import type { AIDeviceConfigStore, LocalAIProviderId } from './ai-device-config.js';
+import type { OnlineAIService } from './online-ai.js';
+
+export type AISummaryExecutionTarget = 'local' | 'online';
 
 export interface AISummaryPreparation {
   readonly sourcePath: string;
@@ -46,8 +51,9 @@ export interface AISummaryPreparation {
   readonly endpoint: string;
   readonly model: string;
   readonly providerId: LocalAIProviderId;
-  readonly dataDestination: 'local_ollama' | 'local_lm_studio';
-  readonly estimatedCost: 0;
+  readonly executionTarget: AISummaryExecutionTarget;
+  readonly dataDestination: 'local_ollama' | 'local_lm_studio' | 'online_openai_compatible';
+  readonly estimatedCost: 0 | null;
   readonly sourcePreview: string;
 }
 
@@ -164,6 +170,7 @@ export class AISummaryService {
     private readonly configStore: AIDeviceConfigStore,
     private readonly providerOrResolver: AIProvider | LocalAIProviderResolver = defaultProvider,
     private readonly now: () => Date = () => new Date(),
+    private readonly onlineAI?: OnlineAIService,
   ) {}
 
   async settings(): Promise<{ readonly providerId: LocalAIProviderId; readonly endpoint: string; readonly model: string; readonly configured: boolean }> {
@@ -193,9 +200,9 @@ export class AISummaryService {
     return this.settings();
   }
 
-  async prepare(sourcePath: string): Promise<AISummaryPreparation> {
-    const config = await this.configStore.load();
-    if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
+  async prepare(sourcePath: string, executionTarget: AISummaryExecutionTarget = 'local'): Promise<AISummaryPreparation> {
+    const execution = await this.execution(executionTarget);
+    const { config } = execution;
     const prepared = await this.readPrepared(sourcePath);
     return {
       sourcePath: prepared.sourcePath,
@@ -211,9 +218,10 @@ export class AISummaryService {
       estimatedModelCalls: prepared.estimatedModelCalls,
       endpoint: config.endpoint,
       model: config.model,
-      providerId: config.providerId,
-      dataDestination: config.providerId === 'ollama' ? 'local_ollama' : 'local_lm_studio',
-      estimatedCost: 0,
+      providerId: config.providerId as LocalAIProviderId,
+      executionTarget,
+      dataDestination: execution.dataDestination,
+      estimatedCost: executionTarget === 'local' ? 0 : null,
       sourcePreview: prepared.workingDocumentContent,
     };
   }
@@ -223,17 +231,21 @@ export class AISummaryService {
     sourceRevision: string,
     template: SummaryTemplate,
     signal?: AbortSignal,
+    executionTarget: AISummaryExecutionTarget = 'local',
   ): Promise<AIPendingSummaryChange> {
     if (!(SUMMARY_TEMPLATES as readonly string[]).includes(template)) throw new Error('摘要模板无效。');
-    const config = await this.configStore.load();
-    if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
+    const execution = await this.execution(executionTarget, signal);
+    const { config } = execution;
     const prepared = await this.readPrepared(sourcePath);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
     await this.ensureWorkingDocument(prepared);
-    const generated = await generateTranscriptSummary(this.provider(config.providerId), config, prepared, template, {
-      resolveSecret: () => Promise.resolve(undefined),
-      ...(signal ? { signal } : {}),
-    });
+    const generated = await generateTranscriptSummary(
+      execution.provider,
+      config,
+      prepared,
+      template,
+      execution.context,
+    );
     const targetPath = summaryPath(sourcePath);
     const existing = await this.readOptional(targetPath);
     const evidenceById = new Map(prepared.evidence.map((item) => [item.id, item]));
@@ -393,6 +405,38 @@ export class AISummaryService {
     return typeof this.providerOrResolver === 'function'
       ? this.providerOrResolver(providerId)
       : this.providerOrResolver;
+  }
+
+  private async execution(
+    target: AISummaryExecutionTarget,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly provider: AIProvider;
+    readonly config: AIProviderConfig;
+    readonly context: AIInvocationContext;
+    readonly dataDestination: AISummaryPreparation['dataDestination'];
+  }> {
+    if (target === 'online') {
+      if (!this.onlineAI) throw new Error('在线 AI 服务尚未初始化。');
+      const runtime = await this.onlineAI.runtime(signal);
+      return {
+        provider: runtime.provider,
+        config: runtime.config,
+        context: runtime.context,
+        dataDestination: 'online_openai_compatible',
+      };
+    }
+    const config = await this.configStore.load();
+    if (!config.model) throw new Error('请先连接本地 AI 服务并选择模型。');
+    return {
+      provider: this.provider(config.providerId),
+      config,
+      context: {
+        resolveSecret: () => Promise.resolve(undefined),
+        ...(signal ? { signal } : {}),
+      },
+      dataDestination: config.providerId === 'ollama' ? 'local_ollama' : 'local_lm_studio',
+    };
   }
 
   private async readOptional(path: string): Promise<VaultFileSnapshot | null> {

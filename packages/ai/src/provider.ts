@@ -5,6 +5,9 @@ import type {
   AIModelDescriptor,
   AIProvider,
   AIProviderConfig,
+  AITranscriptionRequest,
+  AITranscriptionResult,
+  AICapability,
 } from '@oldfolio/domain';
 import { resolveEndpoint, validateAIEndpoint, type EndpointPolicy } from './endpoint-policy.js';
 
@@ -23,6 +26,10 @@ export interface ProviderOptions {
   readonly endpointPolicy?: EndpointPolicy;
   readonly fetch?: typeof fetch;
   readonly defaultHeaders?: Readonly<Record<string, string>>;
+  readonly readMedia?: (
+    uri: string,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly bytes: Uint8Array; readonly fileName: string; readonly mimeType: string }>;
 }
 
 export class AIProviderError extends Error {
@@ -95,7 +102,7 @@ async function readProviderErrorMessage(response: Response): Promise<string | un
 abstract class HttpAIProvider implements AIProvider {
   abstract readonly id: string;
   abstract readonly displayName: string;
-  readonly capabilities = ['chat'] as const;
+  readonly capabilities: readonly AICapability[] = ['chat'];
   protected readonly options: ProviderOptions;
 
   protected constructor(options: ProviderOptions = {}) {
@@ -196,9 +203,14 @@ interface OpenAIResponse {
   readonly usage?: { readonly prompt_tokens?: unknown; readonly completion_tokens?: unknown };
 }
 
+function supportsOnlyJsonTranscription(model: string): boolean {
+  return /^gpt-4o(?:-mini)?-transcribe(?:-|$)/iu.test(model.trim());
+}
+
 export class OpenAICompatibleProvider extends HttpAIProvider {
   readonly id = 'openai-compatible';
   readonly displayName = 'OpenAI-compatible';
+  override readonly capabilities = ['chat', 'transcription'] as const;
 
   constructor(options: ProviderOptions = {}) {
     super(options);
@@ -270,6 +282,78 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
                 : {}),
             },
           }),
+    };
+  }
+
+  async transcribe(
+    config: AIProviderConfig,
+    request: AITranscriptionRequest,
+    context?: AIInvocationContext,
+  ): Promise<AITranscriptionResult> {
+    if (!this.options.readMedia) throw new AIProviderError('在线转录缺少受控媒体读取器。');
+    const media = await this.options.readMedia(request.mediaUri, context?.signal);
+    if (!media.fileName.trim() || !media.mimeType.trim() || media.bytes.byteLength === 0) {
+      throw new AIProviderError('在线转录媒体无效。');
+    }
+    const form = new FormData();
+    const bytes = new Uint8Array(media.bytes).buffer;
+    form.append('file', new Blob([bytes], { type: media.mimeType }), media.fileName);
+    form.append('model', request.model);
+    if (supportsOnlyJsonTranscription(request.model)) {
+      form.append('response_format', 'json');
+    } else {
+      form.append('response_format', 'verbose_json');
+      form.append('timestamp_granularities[]', 'segment');
+    }
+    if (request.language) form.append('language', request.language);
+    if (request.prompt) form.append('prompt', request.prompt);
+    const response = (await this.requestJson(
+      resolveEndpoint(this.endpoint(config), 'audio/transcriptions'),
+      { method: 'POST', body: form },
+      config,
+      context,
+    )) as {
+      readonly text?: unknown;
+      readonly language?: unknown;
+      readonly segments?: readonly {
+        readonly start?: unknown;
+        readonly end?: unknown;
+        readonly text?: unknown;
+      }[];
+      readonly usage?: {
+        readonly input_tokens?: unknown;
+        readonly output_tokens?: unknown;
+      };
+    };
+    if (typeof response.text !== 'string' || !response.text.trim()) {
+      throw new AIProviderError('在线转录响应没有包含文案。');
+    }
+    const segments = (response.segments ?? []).flatMap((segment) => {
+      if (
+        typeof segment.start !== 'number' || !Number.isFinite(segment.start) || segment.start < 0
+        || typeof segment.end !== 'number' || !Number.isFinite(segment.end) || segment.end < segment.start
+        || typeof segment.text !== 'string' || !segment.text.trim()
+      ) return [];
+      return [{
+        startMs: Math.round(segment.start * 1_000),
+        endMs: Math.max(Math.round(segment.end * 1_000), Math.round(segment.start * 1_000) + 1),
+        text: segment.text.trim(),
+      }];
+    });
+    return {
+      text: response.text.trim(),
+      segments: segments.length > 0
+        ? segments
+        : [{ startMs: 0, endMs: Math.max(1, request.durationMs ?? 1), text: response.text.trim() }],
+      ...(typeof response.language === 'string' && response.language.trim()
+        ? { language: response.language.trim() }
+        : request.language ? { language: request.language } : {}),
+      ...(response.usage === undefined ? {} : {
+        usage: {
+          ...(typeof response.usage.input_tokens === 'number' ? { inputTokens: response.usage.input_tokens } : {}),
+          ...(typeof response.usage.output_tokens === 'number' ? { outputTokens: response.usage.output_tokens } : {}),
+        },
+      }),
     };
   }
 }
@@ -395,6 +479,7 @@ export class LMStudioProvider extends HttpAIProvider {
       }),
     };
   }
+
 }
 
 interface OllamaResponse {

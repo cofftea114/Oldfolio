@@ -137,6 +137,78 @@ describe('AI security boundaries', () => {
     expect(String(requestBody.system_prompt)).toContain('"label"');
   });
 
+  it('uploads controlled media to an OpenAI-compatible transcription endpoint with segment timestamps', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      text: '第一段。第二段。',
+      language: 'zh',
+      segments: [
+        { start: 0.25, end: 1.5, text: '第一段。' },
+        { start: 1.5, end: 3.75, text: '第二段。' },
+      ],
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const readMedia = vi.fn().mockResolvedValue({
+      bytes: new Uint8Array([1, 2, 3]), fileName: 'chunk.mp3', mimeType: 'audio/mpeg',
+    });
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['api.example.test'] },
+      fetch: fetchMock,
+      readMedia,
+    });
+    const config = {
+      providerId: 'openai-compatible', endpoint: 'https://api.example.test/v1/', model: 'chat-model',
+      secretRef: 'session:online-ai',
+    };
+
+    const result = await provider.transcribe(config, {
+      model: 'transcribe-model', mediaUri: 'controlled://chunk-1', language: 'zh',
+    }, { resolveSecret: () => Promise.resolve('secret-value') });
+
+    expect(result.segments).toEqual([
+      { startMs: 250, endMs: 1_500, text: '第一段。' },
+      { startMs: 1_500, endMs: 3_750, text: '第二段。' },
+    ]);
+    expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    expect(readMedia).toHaveBeenCalledWith('controlled://chunk-1', undefined);
+    const [requestedUrl, init] = fetchMock.mock.calls[0] ?? [];
+    expect(requestedUrl instanceof URL ? requestedUrl.href : '').toBe('https://api.example.test/v1/audio/transcriptions');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer secret-value');
+    const body = init?.body;
+    expect(body).toBeInstanceOf(FormData);
+    if (!(body instanceof FormData)) throw new Error('Expected multipart transcription body.');
+    expect(body.get('model')).toBe('transcribe-model');
+    expect(body.get('response_format')).toBe('verbose_json');
+    expect(body.get('timestamp_granularities[]')).toBe('segment');
+    expect(JSON.stringify(provider)).not.toContain('secret-value');
+  });
+
+  it('uses plain JSON for GPT-4o transcription and binds fallback text to the audio chunk duration', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      text: '完整分块文案。',
+      usage: { input_tokens: 80, output_tokens: 12 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['api.example.test'] },
+      fetch: fetchMock,
+      readMedia: () => Promise.resolve({
+        bytes: new Uint8Array([1, 2, 3]), fileName: 'chunk.m4a', mimeType: 'audio/mp4',
+      }),
+    });
+
+    const result = await provider.transcribe({
+      providerId: 'openai-compatible', endpoint: 'https://api.example.test/v1/', model: 'chat-model',
+    }, {
+      model: 'gpt-4o-mini-transcribe', mediaUri: 'controlled://chunk-1', durationMs: 600_000,
+    });
+
+    expect(result.segments).toEqual([{ startMs: 0, endMs: 600_000, text: '完整分块文案。' }]);
+    const body = fetchMock.mock.calls[0]?.[1]?.body;
+    expect(body).toBeInstanceOf(FormData);
+    if (!(body instanceof FormData)) throw new Error('Expected multipart transcription body.');
+    expect(body.get('response_format')).toBe('json');
+    expect(body.get('timestamp_granularities[]')).toBeNull();
+  });
+
   it('diagnoses reasoning-only OpenAI-compatible responses that exhaust the output limit', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       model: 'qwen/qwen3.5-9b',

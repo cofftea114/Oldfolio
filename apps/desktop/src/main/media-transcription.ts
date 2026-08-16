@@ -62,7 +62,7 @@ async function hashFile(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
-async function resolveVerifiedAsset(vaultRoot: string, job: MediaJobRecord): Promise<{ absolutePath: string; byteLength: number }> {
+export async function resolveVerifiedAsset(vaultRoot: string, job: MediaJobRecord): Promise<{ absolutePath: string; byteLength: number }> {
   const match = /^assets\/media\/([a-f0-9]{64})\.[a-z0-9]+$/iu.exec(job.sourceUri);
   if (!match || match[1]?.toLowerCase() !== job.sourceHash.toLowerCase()) throw new Error('媒体任务引用了无效的 Vault 资产。');
   const resolver = await VaultPathResolver.create(vaultRoot);

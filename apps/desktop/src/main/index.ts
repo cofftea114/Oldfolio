@@ -1,4 +1,5 @@
-import { join, parse } from 'node:path';
+import { lstat, readFile } from 'node:fs/promises';
+import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
@@ -18,6 +19,12 @@ import { DocumentLifecycleService } from './document-lifecycle.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
+import {
+  OnlineAIConfigStore,
+  OnlineAIService,
+  SessionSecretStore,
+} from './online-ai.js';
+import { resumeOnlineMediaTranscription, transcribeOnlineMediaUrl } from './online-media-transcription.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -33,6 +40,7 @@ let mediaDeviceConfig: MediaDeviceConfigStore | null = null;
 let aiDeviceConfig: AIDeviceConfigStore | null = null;
 let aiSummary: AISummaryService | null = null;
 let documentLifecycle: DocumentLifecycleService | null = null;
+let onlineAI: OnlineAIService | null = null;
 const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
@@ -87,6 +95,30 @@ function requireDocumentLifecycle(): DocumentLifecycleService {
   return documentLifecycle;
 }
 
+function requireOnlineAI(): OnlineAIService {
+  if (!onlineAI) throw new Error('在线 AI 服务尚未初始化');
+  return onlineAI;
+}
+
+async function readControlledOnlineAudio(uri: string): Promise<{
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly mimeType: string;
+}> {
+  const target = resolve(uri);
+  const root = resolve(requireRepository().root, '.oldfolio', 'cache', 'media-work');
+  const child = relative(root, target);
+  if (!child || child.startsWith('..') || isAbsolute(child)) throw new Error('在线 AI 只能读取 Oldfolio 生成的音频分块。');
+  const status = await lstat(target);
+  if (!status.isFile() || status.isSymbolicLink() || status.size <= 0 || status.size > 24 * 1024 * 1024) {
+    throw new Error('在线转录音频分块必须是小于 24 MB 的普通文件。');
+  }
+  const extension = extname(target).toLowerCase();
+  const mimeType = extension === '.m4a' ? 'audio/mp4' : extension === '.mp3' ? 'audio/mpeg' : '';
+  if (!mimeType) throw new Error('在线转录音频分块格式不受支持。');
+  return { bytes: await readFile(target), fileName: basename(target), mimeType };
+}
+
 async function mediaSettingsSummary() {
   const config = await requireMediaDeviceConfig().load();
   const tools = await probeMediaTools(config);
@@ -136,7 +168,13 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
   mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
-  aiSummary = new AISummaryService(repository, requireAIDeviceConfig(), localAIProvider);
+  aiSummary = new AISummaryService(
+    repository,
+    requireAIDeviceConfig(),
+    localAIProvider,
+    () => new Date(),
+    requireOnlineAI(),
+  );
   documentLifecycle = new DocumentLifecycleService(repository);
   await mediaJobs.initialize();
   await repository.rebuildIndex();
@@ -397,6 +435,38 @@ function registerIpc(): void {
       activeMediaTasks.delete(controller);
     }
   });
+  ipcMain.handle('media:transcribe-online', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid online transcription request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.url !== 'string' || value.url.length > 4_096
+      || (value.language !== undefined && typeof value.language !== 'string')
+    ) throw new TypeError('A direct HTTPS media URL is required');
+    const controller = new AbortController();
+    activeMediaTasks.add(controller);
+    try {
+      const result = await transcribeOnlineMediaUrl(
+        requireRepository(),
+        requireMediaJobs(),
+        requireMediaDeviceConfig(),
+        requireOnlineAI(),
+        {
+          url: value.url.trim(),
+          ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+        },
+        { fetcher: chromiumNetworkFetch, signal: controller.signal },
+      );
+      return {
+        cancelled: false,
+        jobId: result.jobId,
+        transcriptSource: result.transcriptSource,
+        transcript: await readDocument(result.transcriptPath),
+      };
+    } finally {
+      activeMediaTasks.delete(controller);
+    }
+  });
   ipcMain.handle('media:list-jobs', async (event) => {
     assertTrustedSender(event);
     return (await requireMediaJobs().list()).map((job) => {
@@ -424,13 +494,16 @@ function registerIpc(): void {
     const controller = new AbortController();
     activeMediaTasks.add(controller);
     try {
-      const result = await resumeMediaTranscription(
-        requireRepository(),
-        requireMediaJobs(),
-        requireMediaDeviceConfig(),
-        jobId,
-        { signal: controller.signal },
-      );
+      const job = await requireMediaJobs().get(jobId);
+      const result = job.request?.kind === 'online_transcription'
+        ? await resumeOnlineMediaTranscription(
+            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireOnlineAI(), jobId,
+            { signal: controller.signal },
+          )
+        : await resumeMediaTranscription(
+            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), jobId,
+            { signal: controller.signal },
+          );
       return {
         cancelled: false,
         jobId: result.jobId,
@@ -473,6 +546,10 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return requireAISummary().settings();
   });
+  ipcMain.handle('ai:get-online-settings', async (event) => {
+    assertTrustedSender(event);
+    return requireOnlineAI().settings();
+  });
   ipcMain.handle('ai:probe-provider', async (event, input: unknown) => {
     assertTrustedSender(event);
     if (typeof input !== 'object' || input === null) throw new TypeError('Invalid local AI probe');
@@ -494,10 +571,42 @@ function registerIpc(): void {
     ) throw new TypeError('Invalid AI settings');
     return requireAISummary().configure(value.providerId, value.endpoint, value.model);
   });
-  ipcMain.handle('ai:prepare-summary', async (event, path: unknown) => {
+  ipcMain.handle('ai:probe-online-provider', async (event, input: unknown) => {
     assertTrustedSender(event);
-    if (typeof path !== 'string') throw new TypeError('Invalid transcript path');
-    return requireAISummary().prepare(path);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid online AI probe');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.endpoint !== 'string' || typeof value.apiKey !== 'string'
+      || typeof value.hostConfirmed !== 'boolean'
+    ) throw new TypeError('Invalid online AI probe');
+    return requireOnlineAI().probe(value.endpoint, value.apiKey, value.hostConfirmed);
+  });
+  ipcMain.handle('ai:save-online-settings', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid online AI settings');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.endpoint !== 'string' || typeof value.apiKey !== 'string'
+      || typeof value.chatModel !== 'string' || typeof value.transcriptionModel !== 'string'
+      || typeof value.hostConfirmed !== 'boolean'
+    ) throw new TypeError('Invalid online AI settings');
+    return requireOnlineAI().configure({
+      endpoint: value.endpoint,
+      apiKey: value.apiKey,
+      chatModel: value.chatModel,
+      transcriptionModel: value.transcriptionModel,
+      hostConfirmed: value.hostConfirmed,
+    });
+  });
+  ipcMain.handle('ai:prepare-summary', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid transcript summary preparation');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.path !== 'string'
+      || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+    ) throw new TypeError('Invalid transcript summary preparation');
+    return requireAISummary().prepare(value.path, value.executionTarget);
   });
   ipcMain.handle('ai:generate-summary', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -507,6 +616,7 @@ function registerIpc(): void {
       typeof value.path !== 'string' ||
       typeof value.sourceRevision !== 'string' ||
       typeof value.template !== 'string' ||
+      (value.executionTarget !== 'local' && value.executionTarget !== 'online') ||
       !(SUMMARY_TEMPLATES as readonly string[]).includes(value.template)
     ) {
       throw new TypeError('Invalid AI summary request');
@@ -519,6 +629,7 @@ function registerIpc(): void {
         value.sourceRevision,
         value.template as (typeof SUMMARY_TEMPLATES)[number],
         controller.signal,
+        value.executionTarget,
       );
     } finally {
       activeAITasks.delete(controller);
@@ -562,7 +673,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'getAISettings', 'prepareAISummary', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'getAISettings', 'getOnlineAISettings', 'prepareAISummary', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;
@@ -625,6 +736,12 @@ function createWindow(): void {
 void app.whenReady().then(() => {
   mediaDeviceConfig = new MediaDeviceConfigStore(join(app.getPath('userData'), 'device', 'media.json'));
   aiDeviceConfig = new AIDeviceConfigStore(join(app.getPath('userData'), 'device', 'ai.json'));
+  onlineAI = new OnlineAIService(
+    new OnlineAIConfigStore(join(app.getPath('userData'), 'device', 'online-ai.json')),
+    new SessionSecretStore(),
+    chromiumNetworkFetch,
+    readControlledOnlineAudio,
+  );
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
@@ -643,6 +760,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   for (const controller of activeMediaTasks) controller.abort(new Error('Oldfolio is closing.'));
   for (const controller of activeAITasks) controller.abort(new Error('Oldfolio is closing.'));
+  onlineAI?.clearSessionKey();
   repository?.close();
 });
 

@@ -125,6 +125,19 @@ export interface AISettingsSummary {
   configured: boolean;
 }
 
+export type AISummaryExecutionTarget = 'local' | 'online';
+
+export interface OnlineAISettingsSummary {
+  version: 1;
+  endpoint: string;
+  confirmedHost: string;
+  chatModel: string;
+  transcriptionModel: string;
+  secretRef: string;
+  configured: boolean;
+  keyAvailable: boolean;
+}
+
 export interface AIModelSummary {
   id: string;
   displayName: string;
@@ -145,8 +158,9 @@ export interface AISummaryPreparation {
   endpoint: string;
   model: string;
   providerId: AILocalProviderId;
-  dataDestination: 'local_ollama' | 'local_lm_studio';
-  estimatedCost: 0;
+  executionTarget: AISummaryExecutionTarget;
+  dataDestination: 'local_ollama' | 'local_lm_studio' | 'online_openai_compatible';
+  estimatedCost: 0 | null;
   sourcePreview: string;
 }
 
@@ -200,21 +214,36 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  transcribeOnlineMedia(input: { url: string; language?: string }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;
   getAISettings(): Promise<AISettingsSummary>;
+  getOnlineAISettings(): Promise<OnlineAISettingsSummary>;
   probeLocalAI(input: { providerId: AILocalProviderId; endpoint: string }): Promise<AIModelSummary[]>;
+  probeOnlineAI(input: {
+    endpoint: string;
+    apiKey: string;
+    hostConfirmed: boolean;
+  }): Promise<AIModelSummary[]>;
   saveAISettings(input: {
     providerId: AILocalProviderId;
     endpoint: string;
     model: string;
   }): Promise<AISettingsSummary>;
-  prepareAISummary(path: string): Promise<AISummaryPreparation>;
+  saveOnlineAISettings(input: {
+    endpoint: string;
+    chatModel: string;
+    transcriptionModel: string;
+    apiKey: string;
+    hostConfirmed: boolean;
+  }): Promise<OnlineAISettingsSummary>;
+  prepareAISummary(path: string, executionTarget: AISummaryExecutionTarget): Promise<AISummaryPreparation>;
   generateAISummary(input: {
     path: string;
     sourceRevision: string;
     template: AISummaryTemplate;
+    executionTarget: AISummaryExecutionTarget;
   }): Promise<AIPendingSummaryChange>;
   applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
   undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;

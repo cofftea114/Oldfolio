@@ -32,6 +32,20 @@ export interface LocalMediaTranscriptionRequest {
   readonly chunkDurationMs: number;
 }
 
+export interface OnlineMediaTranscriptionRequest {
+  readonly kind: 'online_transcription';
+  readonly sourceTitle: string;
+  readonly importedFrom: string;
+  readonly providerId: 'openai-compatible';
+  readonly endpointHost: string;
+  readonly transcriptionModel: string;
+  readonly secretRef: string;
+  readonly language?: string;
+  readonly chunkDurationMs: number;
+}
+
+export type MediaTranscriptionRequest = LocalMediaTranscriptionRequest | OnlineMediaTranscriptionRequest;
+
 export interface MediaJobError {
   readonly code: string;
   readonly message: string;
@@ -48,7 +62,7 @@ export interface MediaJobRecord {
   readonly stage: MediaJobStage;
   readonly attempts: number;
   readonly checkpoints: readonly MediaJobCheckpoint[];
-  readonly request?: LocalMediaTranscriptionRequest;
+  readonly request?: MediaTranscriptionRequest;
   readonly transcriptSegments?: readonly AITranscriptSegment[];
   readonly outputPaths?: readonly VaultPath[];
   readonly error?: MediaJobError;

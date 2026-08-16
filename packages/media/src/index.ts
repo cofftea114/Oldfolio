@@ -5,6 +5,7 @@ export * from './embedded-subtitles.js';
 export * from './jobs.js';
 export * from './media-analysis.js';
 export * from './model-store.js';
+export * from './online-transcription.js';
 export * from './playback.js';
 export * from './process.js';
 export * from './transcript-document.js';

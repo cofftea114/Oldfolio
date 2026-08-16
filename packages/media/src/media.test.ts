@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { AIProvider } from '@oldfolio/domain';
 import { parseOkfDocument } from '@oldfolio/okf';
 
 import { importMediaAsset } from './asset-import.js';
@@ -23,6 +24,7 @@ import {
   probeMediaDuration,
 } from './media-analysis.js';
 import { importLocalModel } from './model-store.js';
+import { OnlineAudioTranscriber } from './online-transcription.js';
 import { parseSynthesisTranscriptPath, parseTranscriptPlaybackManifest } from './playback.js';
 import { ControlledProcessError, runControlledProcess } from './process.js';
 import { compileTranscriptDocument } from './transcript-document.js';
@@ -378,5 +380,54 @@ describe('local media tool boundary', () => {
     const asset = await importMediaAsset(sourceMedia, join(root, 'vault'));
     expect(asset.vaultPath).toBe(`assets/media/${sha256('media bytes')}.mp3`);
     expect(await readFile(asset.absolutePath, 'utf8')).toBe('media bytes');
+  });
+
+  it('transcribes bounded online audio chunks and resumes from verified artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-online-transcription-'));
+    roots.push(root);
+    const mediaPath = join(root, 'video.mp4');
+    await writeFile(mediaPath, 'video');
+    let providerCalls = 0;
+    const provider: AIProvider = {
+      id: 'openai-compatible', displayName: 'Online', capabilities: ['transcription'],
+      listModels: () => Promise.resolve([]),
+      complete: () => Promise.reject(new Error('not used')),
+      transcribe: (_config, request) => {
+        providerCalls += 1;
+        expect(request.mediaUri).toMatch(/online-chunk-\d{5}\.m4a$/u);
+        return Promise.resolve({
+          text: `chunk ${providerCalls}`,
+          segments: [{ startMs: 500, endMs: 1_500, text: `chunk ${providerCalls}` }],
+        });
+      },
+    };
+    const processCalls: string[][] = [];
+    const completed: { index: number; artifactHash: string }[] = [];
+    const transcriber = new OnlineAudioTranscriber((request) => {
+      processCalls.push([...request.args]);
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    });
+    const baseOptions = {
+      ffmpegPath: 'ffmpeg', workDirectory: root, durationMs: 25_000, chunkDurationMs: 10_000,
+      provider,
+      providerConfig: {
+        providerId: 'openai-compatible', endpoint: 'https://api.example.test/v1/', model: 'chat',
+      },
+      providerContext: { resolveSecret: () => Promise.resolve('secret') },
+      model: 'transcribe',
+    } as const;
+    const result = await transcriber.transcribe(mediaPath, {
+      ...baseOptions,
+      onChunkComplete: (chunk, _path, artifactHash) => { completed.push({ index: chunk.index, artifactHash }); },
+    });
+    expect(result.segments.map((segment) => segment.startMs)).toEqual([500, 10_500, 20_500]);
+    expect(processCalls).toHaveLength(3);
+    expect(processCalls[0]).toContain('64k');
+    expect(providerCalls).toBe(3);
+
+    const resumed = new OnlineAudioTranscriber(() => Promise.reject(new Error('must reuse cache')));
+    const resumedResult = await resumed.transcribe(mediaPath, { ...baseOptions, completedChunks: completed });
+    expect(resumedResult.segments.map((segment) => segment.startMs)).toEqual([500, 10_500, 20_500]);
+    expect(providerCalls).toBe(3);
   });
 });

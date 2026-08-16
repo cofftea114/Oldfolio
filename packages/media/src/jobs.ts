@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   AITranscriptSegment,
-  LocalMediaTranscriptionRequest,
+  MediaTranscriptionRequest,
   MediaJobError,
   MediaJobRecord,
   MediaJobStage,
@@ -14,7 +14,7 @@ const ACTIVE_STAGES = new Set<MediaJobStage>(['probing', 'extracting_subtitles',
 export interface CreateMediaJobInput {
   readonly sourceUri: string;
   readonly sourceHash: string;
-  readonly request?: LocalMediaTranscriptionRequest;
+  readonly request?: MediaTranscriptionRequest;
 }
 
 export class MediaJobStore {

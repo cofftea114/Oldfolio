@@ -37,6 +37,12 @@ claim that the planned 9–12 month v1 is complete.
   select a preferred/default language track, and convert supported text subtitles to WebVTT while
   preserving timestamps. The generated Source records all detected tracks and the chosen transcript
   provenance; extraction failures and media without text subtitles fall back to Whisper.
+- Import a public HTTPS audio/video direct link without ambient credentials or automatic redirects.
+  The desktop streams a bounded response into a content-addressed Vault asset, rejects unsupported
+  media and private literal hosts, prefers embedded text subtitles, and otherwise uses local FFmpeg
+  to create deterministic audio chunks for an online OpenAI-compatible transcription model. Chunk
+  JSON artifacts are SHA-256 verified and reusable after interruption; the remote host and model are
+  bound to the persisted retry request.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.
@@ -50,6 +56,11 @@ claim that the planned 9–12 month v1 is complete.
   follows the transcript's Chinese/English language, and uses one representative playback anchor per viewpoint;
   original evidence IDs remain validated at every step. Preview the complete OKF `Synthesis` content and diff,
   and apply or undo the resulting L1/L2 change set.
+- Configure an HTTPS OpenAI-compatible endpoint for online transcription and summary. The user must
+  explicitly confirm the destination host and can inspect the complete summary working document before
+  it is sent. Only endpoint, confirmed host, model names, and an opaque secret reference are serialized.
+  The current API Key implementation is deliberately session-only main-process memory: it is cleared
+  on exit and never written to the Vault, SQLite, ordinary config, or logs.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.
 
@@ -58,9 +69,9 @@ claim that the planned 9–12 month v1 is complete.
 - WebDAV E2EE object encryption, manifest hash chains, recovery material, and exclusive sync-mode
   state are implemented as tested primitives. A production WebDAV transport, pairing UI, epoch-key
   rotation workflow, and external cryptographic review are still required.
-- The OpenAI-compatible provider and secret-resolver boundary are implemented, but its desktop
-  remote/BYOK settings UI remains disabled until native OS credential stores are connected. The
-  current end-user summary workflow supports loopback Ollama and LM Studio without API keys.
+- The online OpenAI-compatible provider, desktop BYOK settings, transcription, and summary flow are
+  integrated. Persistent BYOK remains disabled until native OS credential stores are connected, so
+  users must re-enter the API Key on each application run.
 - The mobile application is a web/Capacitor shell; native projects, keychain bindings, WebDAV sync,
   background upload behavior, and store packaging remain future work.
 
@@ -81,5 +92,5 @@ claim that the planned 9–12 month v1 is complete.
   AI chat, and reusable concept extraction across multiple transcripts.
 
 The next product increment should add reusable Concept extraction and summary translation, then
-connect OS credential stores for OpenAI-compatible BYOK without weakening
-the current payload-disclosure and no-secret-in-Vault boundaries.
+connect OS credential stores for persistent OpenAI-compatible BYOK without weakening the current
+payload-disclosure and no-secret-in-Vault boundaries.

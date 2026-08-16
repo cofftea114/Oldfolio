@@ -27,11 +27,13 @@ import type {
   AIModelSummary,
   AIPendingSummaryChange,
   AISettingsSummary,
+  AISummaryExecutionTarget,
   AISummaryPreparation,
   AISummaryTemplate,
   DocumentSummary,
   MediaJobSummary,
   MediaSettingsSummary,
+  OnlineAISettingsSummary,
   SearchHit,
   TranscriptPlaybackSummary,
   VaultDocument,
@@ -64,6 +66,14 @@ const LOCAL_AI_DEFAULT_ENDPOINTS: Readonly<Record<AILocalProviderId, string>> = 
   'openai-compatible': 'http://127.0.0.1:1234/api/v1/',
 };
 
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return endpoint;
+  }
+}
+
 export function App() {
   const [vault, setVault] = useState<VaultSummary | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -95,6 +105,15 @@ export function App() {
   const [aiEndpoint, setAIEndpoint] = useState('http://127.0.0.1:11434/api/');
   const [aiModels, setAIModels] = useState<AIModelSummary[]>([]);
   const [aiModel, setAIModel] = useState('');
+  const [aiExecutionTarget, setAIExecutionTarget] = useState<AISummaryExecutionTarget>('local');
+  const [onlineAISettings, setOnlineAISettings] = useState<OnlineAISettingsSummary | null>(null);
+  const [onlineAIEndpoint, setOnlineAIEndpoint] = useState('https://api.openai.com/v1/');
+  const [onlineAPIKey, setOnlineAPIKey] = useState('');
+  const [onlineHostConfirmed, setOnlineHostConfirmed] = useState(false);
+  const [onlineModels, setOnlineModels] = useState<AIModelSummary[]>([]);
+  const [onlineChatModel, setOnlineChatModel] = useState('');
+  const [onlineTranscriptionModel, setOnlineTranscriptionModel] = useState('gpt-4o-mini-transcribe');
+  const [onlineMediaUrl, setOnlineMediaUrl] = useState('');
   const [aiBusy, setAIBusy] = useState(false);
   const [aiError, setAIError] = useState('');
   const [summaryPreparation, setSummaryPreparation] = useState<AISummaryPreparation | null>(null);
@@ -227,11 +246,21 @@ export function App() {
     if (!next || !vault) return;
     setAIError('');
     try {
-      const settings = await window.oldfolio.getAISettings();
+      const [settings, onlineSettings, currentMediaSettings] = await Promise.all([
+        window.oldfolio.getAISettings(),
+        window.oldfolio.getOnlineAISettings(),
+        window.oldfolio.getMediaSettings(),
+      ]);
       setAISettings(settings);
       setAIProvider(settings.providerId);
       setAIEndpoint(settings.endpoint);
       setAIModel(settings.model);
+      setOnlineAISettings(onlineSettings);
+      setOnlineAIEndpoint(onlineSettings.endpoint);
+      setOnlineChatModel(onlineSettings.chatModel);
+      setOnlineTranscriptionModel(onlineSettings.transcriptionModel || 'gpt-4o-mini-transcribe');
+      setOnlineHostConfirmed(false);
+      setMediaSettings(currentMediaSettings);
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法读取 AI 配置');
     }
@@ -271,6 +300,53 @@ export function App() {
     }
   };
 
+  const probeOnlineAI = async () => {
+    if (!onlineAPIKey.trim()) return;
+    setAIBusy(true);
+    setAIError('');
+    setStatus('正在连接在线 OpenAI-compatible 服务…');
+    try {
+      const models = await window.oldfolio.probeOnlineAI({
+        endpoint: onlineAIEndpoint,
+        apiKey: onlineAPIKey,
+        hostConfirmed: onlineHostConfirmed,
+      });
+      setOnlineModels(models);
+      setOnlineChatModel((current) => models.some((model) => model.id === current) ? current : models[0]?.id ?? '');
+      setStatus(models.length ? `已发现 ${models.length} 个在线模型` : '在线服务可连接，但没有返回模型');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法连接在线 AI 服务');
+      setStatus('在线 AI 连接失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const saveOnlineAISettings = async () => {
+    if (!onlineChatModel.trim() || !onlineTranscriptionModel.trim() || !onlineAPIKey.trim()) return;
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const settings = await window.oldfolio.saveOnlineAISettings({
+        endpoint: onlineAIEndpoint,
+        chatModel: onlineChatModel,
+        transcriptionModel: onlineTranscriptionModel,
+        apiKey: onlineAPIKey,
+        hostConfirmed: onlineHostConfirmed,
+      });
+      setOnlineAISettings(settings);
+      setOnlineAIEndpoint(settings.endpoint);
+      setOnlineAPIKey('');
+      setOnlineHostConfirmed(false);
+      setStatus('在线 AI 已连接；API Key 仅保留在当前运行会话');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法保存在线 AI 配置');
+      setStatus('在线 AI 配置失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
   const prepareAISummary = async () => {
     if (!active || !playback || draft !== active.content) return;
     setAIBusy(true);
@@ -279,7 +355,7 @@ export function App() {
     setAppliedChange(null);
     setStatus('正在准备摘要数据披露…');
     try {
-      const preparation = await window.oldfolio.prepareAISummary(active.path);
+      const preparation = await window.oldfolio.prepareAISummary(active.path, aiExecutionTarget);
       setSummaryPreparation(preparation);
       setSummaryTemplate(preparation.suggestedTemplate);
       setStatus('请确认发送内容和摘要模板');
@@ -295,12 +371,15 @@ export function App() {
     if (!summaryPreparation) return;
     setAIBusy(true);
     setAIError('');
-    setStatus(`正在由本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]} 生成摘要…`);
+    setStatus(summaryPreparation.executionTarget === 'online'
+      ? '正在由在线大模型生成摘要…'
+      : `正在由本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]} 生成摘要…`);
     try {
       const pending = await window.oldfolio.generateAISummary({
         path: summaryPreparation.sourcePath,
         sourceRevision: summaryPreparation.sourceRevision,
         template: summaryTemplate,
+        executionTarget: summaryPreparation.executionTarget,
       });
       setPendingSummary(pending);
       setStatus('AI 摘要变更集已生成，等待批准');
@@ -467,6 +546,39 @@ export function App() {
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '本地转录失败');
       setStatus('本地转录失败，任务状态已保留');
+    } finally {
+      window.clearInterval(poll);
+      await refreshMedia();
+      setImporting(false);
+    }
+  };
+
+  const transcribeOnlineMedia = async () => {
+    if (!vault || !onlineMediaUrl.trim() || importing) return;
+    setImporting(true);
+    setImportError('');
+    setAIError('');
+    setStatus('正在下载在线媒体并准备在线转录；已完成分块可用于续跑…');
+    const poll = window.setInterval(() => void window.oldfolio.listMediaJobs().then(setMediaJobs), 1_000);
+    try {
+      const language = mediaLanguage.trim();
+      const result = await window.oldfolio.transcribeOnlineMedia({
+        url: onlineMediaUrl.trim(),
+        ...(language && language !== 'auto' ? { language } : {}),
+      });
+      if (result.cancelled || !result.transcript) {
+        setStatus('已取消在线媒体分析');
+        return;
+      }
+      await loadDocuments();
+      await openDocument(result.transcript.path);
+      setStatus(result.transcriptSource === 'embedded_subtitle'
+        ? '已优先提取在线媒体的内嵌字幕并生成笔记'
+        : '在线模型转录笔记已生成，可继续准备摘要');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '在线媒体转录失败';
+      setAIError(message);
+      setStatus('在线媒体转录失败，已完成分块仍会保留');
     } finally {
       window.clearInterval(poll);
       await refreshMedia();
@@ -675,47 +787,127 @@ export function App() {
         )}
         {aiSettingsOpen && (
           <section className="media-settings ai-settings">
-            <div className="section-label"><Sparkles size={14} /> 本地 AI</div>
-            <p className="model-help">连接本机 Ollama 或 LM Studio。摘要数据只发送到下方回环地址，不会经过 Oldfolio 服务。</p>
-            {aiSettings?.configured && <small className="model-help-note">当前设备：{LOCAL_AI_PROVIDER_LABELS[aiSettings.providerId]} · {aiSettings.model}</small>}
-            <label className="field-label">服务类型
+            <div className="section-label"><Sparkles size={14} /> AI 模型与在线媒体</div>
+            <label className="field-label">配置类型
               <select
                 disabled={aiBusy || !vault}
-                value={aiProvider}
-                onChange={(event) => {
-                  const providerId = event.target.value as AILocalProviderId;
-                  setAIProvider(providerId);
-                  setAIEndpoint(LOCAL_AI_DEFAULT_ENDPOINTS[providerId]);
-                  setAIModels([]);
-                  setAIModel('');
-                }}
+                value={aiExecutionTarget}
+                onChange={(event) => setAIExecutionTarget(event.target.value as AISummaryExecutionTarget)}
               >
-                <option value="ollama">Ollama</option>
-                <option value="openai-compatible">LM Studio（原生 API）</option>
+                <option value="local">本机模型</option>
+                <option value="online">在线 OpenAI-compatible</option>
               </select>
             </label>
-            <label className="field-label">服务地址
-              <input
-                disabled={aiBusy || !vault}
-                value={aiEndpoint}
-                onChange={(event) => setAIEndpoint(event.target.value)}
-                placeholder={LOCAL_AI_DEFAULT_ENDPOINTS[aiProvider]}
-              />
-            </label>
-            <button disabled={aiBusy || !vault || !aiEndpoint.trim()} onClick={() => void probeLocalAI()}>
-              {aiBusy ? '检测中…' : '检测本机模型'}
-            </button>
-            <label className="field-label">摘要模型
-              <select disabled={aiBusy || aiModels.length === 0} value={aiModel} onChange={(event) => setAIModel(event.target.value)}>
-                {!aiModel && <option value="">尚未检测模型</option>}
-                {aiModel && !aiModels.some((model) => model.id === aiModel) && <option value={aiModel}>{aiModel}（已保存）</option>}
-                {aiModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
-              </select>
-            </label>
-            <button className="transcribe-button" disabled={aiBusy || !aiModel} onClick={() => void saveAISettings()}>
-              保存当前设备配置
-            </button>
-            <small className="model-help-note">这里只保存服务类型、endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
+            {aiExecutionTarget === 'local' ? (
+              <>
+                <p className="model-help">连接本机 Ollama 或 LM Studio。摘要数据只发送到下方回环地址，不会经过 Oldfolio 服务。</p>
+                {aiSettings?.configured && <small className="model-help-note">当前设备：{LOCAL_AI_PROVIDER_LABELS[aiSettings.providerId]} · {aiSettings.model}</small>}
+                <label className="field-label">服务类型
+                  <select
+                    disabled={aiBusy || !vault}
+                    value={aiProvider}
+                    onChange={(event) => {
+                      const providerId = event.target.value as AILocalProviderId;
+                      setAIProvider(providerId);
+                      setAIEndpoint(LOCAL_AI_DEFAULT_ENDPOINTS[providerId]);
+                      setAIModels([]);
+                      setAIModel('');
+                    }}
+                  >
+                    <option value="ollama">Ollama</option>
+                    <option value="openai-compatible">LM Studio（原生 API）</option>
+                  </select>
+                </label>
+                <label className="field-label">服务地址
+                  <input
+                    disabled={aiBusy || !vault}
+                    value={aiEndpoint}
+                    onChange={(event) => setAIEndpoint(event.target.value)}
+                    placeholder={LOCAL_AI_DEFAULT_ENDPOINTS[aiProvider]}
+                  />
+                </label>
+                <button disabled={aiBusy || !vault || !aiEndpoint.trim()} onClick={() => void probeLocalAI()}>
+                  {aiBusy ? '检测中…' : '检测本机模型'}
+                </button>
+                <label className="field-label">摘要模型
+                  <select disabled={aiBusy || aiModels.length === 0} value={aiModel} onChange={(event) => setAIModel(event.target.value)}>
+                    {!aiModel && <option value="">尚未检测模型</option>}
+                    {aiModel && !aiModels.some((model) => model.id === aiModel) && <option value={aiModel}>{aiModel}（已保存）</option>}
+                    {aiModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
+                  </select>
+                </label>
+                <button className="transcribe-button" disabled={aiBusy || !aiModel} onClick={() => void saveAISettings()}>
+                  保存当前设备配置
+                </button>
+                <small className="model-help-note">这里只保存服务类型、endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
+              </>
+            ) : (
+              <>
+                <p className="model-help">在线模式只支持公开的 HTTPS 音视频直链，不抓取平台页面、Cookie 或隐藏接口。音频分块和完整摘要工作文档将由你的设备直接发送给所选服务商。</p>
+                {onlineAISettings?.configured && (
+                  <small className="model-help-note">
+                    已配置：{onlineAISettings.confirmedHost} · {onlineAISettings.chatModel} · API Key {onlineAISettings.keyAvailable ? '本次会话可用' : '需重新输入'}
+                  </small>
+                )}
+                <label className="field-label">OpenAI-compatible 地址
+                  <input
+                    disabled={aiBusy || !vault}
+                    onChange={(event) => {
+                      setOnlineAIEndpoint(event.target.value);
+                      setOnlineHostConfirmed(false);
+                      setOnlineModels([]);
+                    }}
+                    placeholder="https://api.openai.com/v1/"
+                    type="url"
+                    value={onlineAIEndpoint}
+                  />
+                </label>
+                <label className="field-label">API Key（仅本次运行）
+                  <input
+                    autoComplete="off"
+                    disabled={aiBusy || !vault}
+                    onChange={(event) => setOnlineAPIKey(event.target.value)}
+                    placeholder={onlineAISettings?.keyAvailable ? '当前会话已有 Key；重新配置时输入' : 'sk-…'}
+                    type="password"
+                    value={onlineAPIKey}
+                  />
+                </label>
+                <label className="accept-license">
+                  <input checked={onlineHostConfirmed} disabled={aiBusy || !vault} onChange={(event) => setOnlineHostConfirmed(event.target.checked)} type="checkbox" />
+                  我确认将内容直接发送到 {endpointHost(onlineAIEndpoint) || '上述域名'}，并由该服务商计费
+                </label>
+                <button disabled={aiBusy || !vault || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineAIEndpoint.trim()} onClick={() => void probeOnlineAI()}>
+                  {aiBusy ? '检测中…' : '检测在线模型'}
+                </button>
+                <label className="field-label">摘要模型
+                  <select disabled={aiBusy || onlineModels.length === 0} value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)}>
+                    {!onlineChatModel && <option value="">尚未检测模型</option>}
+                    {onlineChatModel && !onlineModels.some((model) => model.id === onlineChatModel) && <option value={onlineChatModel}>{onlineChatModel}（已保存）</option>}
+                    {onlineModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
+                  </select>
+                </label>
+                <label className="field-label">语音转录模型
+                  <input disabled={aiBusy || !vault} onChange={(event) => setOnlineTranscriptionModel(event.target.value)} placeholder="gpt-4o-mini-transcribe" value={onlineTranscriptionModel} />
+                </label>
+                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim() || !onlineTranscriptionModel.trim()} onClick={() => void saveOnlineAISettings()}>
+                  保存配置并保留本次会话 Key
+                </button>
+                <small className="model-help-note">endpoint、模型名和密钥引用保存在当前设备；API Key 只在主进程内存中保留，退出 Oldfolio 后清除，不写入 Vault、索引或日志。</small>
+                <div className="import-divider"><span>在线媒体</span></div>
+                <label className="field-label">公开 HTTPS 音视频直链
+                  <input disabled={aiBusy || importing || !vault} onChange={(event) => setOnlineMediaUrl(event.target.value)} placeholder="https://example.com/video.mp4" type="url" value={onlineMediaUrl} />
+                </label>
+                <button
+                  className="transcribe-button"
+                  disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !onlineAISettings?.configured || !onlineAISettings.keyAvailable || !mediaSettings?.ffmpeg.available}
+                  onClick={() => void transcribeOnlineMedia()}
+                >
+                  {importing ? '处理中…' : '分析在线音视频'}
+                </button>
+                {!mediaSettings?.ffmpeg.available && <small className="model-help-note">在线转录仍需在“本地媒体设置”中配置 FFmpeg，用于提取和切分音频。</small>}
+                <small className="model-help-note">若媒体含文本字幕，会先在本地提取；否则按分块发送音频到 {onlineAISettings?.confirmedHost || endpointHost(onlineAIEndpoint)}。最大下载 2 GB，可恢复已完成的转录分块。</small>
+              </>
+            )}
             {aiError && <p className="media-error" role="alert">{aiError}</p>}
           </section>
         )}
@@ -856,7 +1048,13 @@ export function App() {
             <div className="section-label"><Sparkles size={14} /> AI 变更集</div>
             {!summaryPreparation && !pendingSummary && !appliedChange && (
               <>
-                <p>从带时间戳的 Transcript 生成引用可追溯的摘要。AI 只创建待审阅变更集，不会静默覆盖笔记。</p>
+                <p>从 Transcript 归纳视频的核心观点和论证结构。AI 只创建待审阅变更集，不会静默覆盖笔记。</p>
+                <label className="field-label">摘要运行位置
+                  <select disabled={aiBusy} value={aiExecutionTarget} onChange={(event) => setAIExecutionTarget(event.target.value as AISummaryExecutionTarget)}>
+                    <option value="local">本机模型</option>
+                    <option value="online">在线 OpenAI-compatible</option>
+                  </select>
+                </label>
                 <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
                   {aiBusy ? '准备中…' : '准备摘要'}
                 </button>
@@ -867,16 +1065,21 @@ export function App() {
             {summaryPreparation && !pendingSummary && (
               <div className="ai-review">
                 <dl>
-                  <div><dt>目标</dt><dd>本机 {LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]}</dd></div>
+                  <div><dt>目标</dt><dd>{summaryPreparation.executionTarget === 'online'
+                    ? `在线 ${endpointHost(summaryPreparation.endpoint)}`
+                    : `本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]}`}</dd></div>
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
                   <div><dt>工作文件</dt><dd>{summaryPreparation.workingDocumentPath}</dd></div>
                   <div><dt>处理方式</dt><dd>{summaryPreparation.processingMode === 'document-reader'
-                    ? `文档读取器（预计 ${summaryPreparation.estimatedModelCalls} 次本地调用）`
+                    ? `文档读取器（预计 ${summaryPreparation.estimatedModelCalls} 次模型调用）`
                     : '单次摘要'}</dd></div>
-                  <div><dt>预计费用</dt><dd>¥0（本地）</dd></div>
+                  <div><dt>预计费用</dt><dd>{summaryPreparation.estimatedCost === 0 ? '¥0（本地）' : '由在线服务商计费'}</dd></div>
                 </dl>
+                {summaryPreparation.executionTarget === 'online' && (
+                  <p className="ai-hint">确认后，下面展示的完整工作文档会由你的设备直接发送到 {endpointHost(summaryPreparation.endpoint)}。Oldfolio 不代理请求；费用和数据保留规则以该服务商为准。</p>
+                )}
                 <label className="field-label">摘要模板
                   <select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value as AISummaryTemplate)}>
                     {summaryPreparation.availableTemplates.map((template) => (
@@ -889,7 +1092,9 @@ export function App() {
                   <pre>{summaryPreparation.sourcePreview}</pre>
                 </details>
                 <button disabled={aiBusy} onClick={() => void generateAISummary()}>
-                  {aiBusy ? '生成中…' : '确认并发送到本机模型'}
+                  {aiBusy ? '生成中…' : summaryPreparation.executionTarget === 'online'
+                    ? '确认并发送到在线模型'
+                    : '确认并发送到本机模型'}
                 </button>
               </div>
             )}

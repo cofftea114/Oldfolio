@@ -67,6 +67,8 @@ export interface AIEmbeddingResult {
 export interface AITranscriptionRequest {
   readonly model: string;
   readonly mediaUri: string;
+  /** Duration of the controlled media input, used when a provider cannot return granular timestamps. */
+  readonly durationMs?: number;
   readonly language?: string;
   readonly prompt?: string;
 }
