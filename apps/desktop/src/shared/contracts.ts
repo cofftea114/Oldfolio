@@ -68,6 +68,7 @@ export interface InstalledModelSummary {
 export interface MediaSettingsSummary {
   ffmpeg: MediaToolStatus;
   whisper: MediaToolStatus;
+  ytDlp: MediaToolStatus;
   models: InstalledModelSummary[];
 }
 
@@ -221,7 +222,7 @@ export interface OldfolioDesktopApi {
   importFeed(url: string): Promise<FeedImportResult>;
   importCaptions(): Promise<CaptionImportResult>;
   getMediaSettings(): Promise<MediaSettingsSummary>;
-  chooseMediaTool(kind: 'ffmpeg' | 'whisper'): Promise<MediaSettingsSummary>;
+  chooseMediaTool(kind: 'ffmpeg' | 'whisper' | 'yt-dlp'): Promise<MediaSettingsSummary>;
   importWhisperModel(input: {
     id: string;
     license: string;
@@ -230,8 +231,9 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  transcribeOnlineMediaLocally(input: { url: string; modelId: string; language?: string; platformAccessConfirmed: boolean }): Promise<MediaTranscriptionResult>;
   transcribeCloudMedia(input: { language?: string }): Promise<MediaTranscriptionResult>;
-  transcribeOnlineMedia(input: { url: string; language?: string }): Promise<MediaTranscriptionResult>;
+  transcribeOnlineMedia(input: { url: string; language?: string; platformAccessConfirmed?: boolean }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;

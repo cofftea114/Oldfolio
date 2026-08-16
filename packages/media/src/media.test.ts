@@ -326,6 +326,7 @@ describe('local media tool boundary', () => {
     expect(await store.load()).toEqual({ version: 1, models: [] });
     await store.setTool('ffmpeg', 'C:/tools/ffmpeg.exe');
     await store.setTool('whisper', 'C:/tools/whisper-cli.exe');
+    await store.setTool('yt-dlp', 'C:/tools/yt-dlp.exe');
     const config = await store.load();
     const calls: string[] = [];
     const status = await probeMediaTools(config, (request) => {
@@ -334,10 +335,12 @@ describe('local media tool boundary', () => {
     });
     expect(status.ffmpeg).toMatchObject({ available: true, version: 'media tool 8.0' });
     expect(status.whisper).toMatchObject({ available: true, version: 'whisper.cpp 1.7' });
+    expect(status.ytDlp).toMatchObject({ available: true });
     expect(calls).toEqual([
       'C:/tools/ffmpeg.exe -version',
       'C:/tools/ffprobe.exe -version',
       'C:/tools/whisper-cli.exe --help',
+      'C:/tools/yt-dlp.exe --version',
     ]);
 
     const missingProbe = await probeMediaTools(config, (request) => {

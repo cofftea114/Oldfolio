@@ -31,6 +31,7 @@ export interface TranscribeMediaFileInput {
   readonly mediaPath: string;
   readonly vaultRoot: string;
   readonly modelId: string;
+  readonly importedFrom?: string;
   readonly language?: string;
 }
 
@@ -176,10 +177,11 @@ export async function resumeMediaTranscription(
     await jobs.checkpoint(job.id, 'compiling', 0.85, { transcriptSegments: transcript.segments });
     const fetchedAt = now().toISOString();
     const sourceId = `media-${job.sourceHash}`;
+    const remoteSource = request.importedFrom?.startsWith('https://') === true;
     const snapshot: SourceSnapshot = {
       id: sourceId,
-      connectorId: 'org.oldfolio.local-media',
-      canonicalUri: job.sourceUri,
+      connectorId: remoteSource ? 'org.oldfolio.remote-media' : 'org.oldfolio.local-media',
+      canonicalUri: remoteSource ? request.importedFrom : job.sourceUri,
       fetchedAt,
       contentHash: job.sourceHash,
       title: request.sourceTitle,
@@ -248,7 +250,7 @@ export async function transcribeMediaFile(
     request: {
       kind: 'local_transcription',
       sourceTitle: asset.originalName,
-      importedFrom: input.mediaPath,
+      importedFrom: input.importedFrom ?? input.mediaPath,
       modelId: model.id,
       modelHash: model.sha256,
       ...(input.language ? { language: input.language } : {}),

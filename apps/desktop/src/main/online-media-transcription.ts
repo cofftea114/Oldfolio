@@ -72,7 +72,7 @@ export async function transcribeCloudMediaFile(
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
   cloudTranscription: CloudTranscriptionService,
-  input: { readonly mediaPath: string; readonly language?: string },
+  input: { readonly mediaPath: string; readonly importedFrom?: string; readonly language?: string },
   options: OnlineMediaTranscriptionOptions = {},
 ): Promise<TranscribeMediaFileResult> {
   const config = await deviceConfig.load();
@@ -87,9 +87,9 @@ export async function transcribeCloudMediaFile(
     sourceHash: asset.contentHash,
     request: {
       kind: 'online_transcription',
-      sourceKind: 'local-file',
+      sourceKind: input.importedFrom ? 'remote-url' : 'local-file',
       sourceTitle: asset.originalName,
-      importedFrom: input.mediaPath,
+      importedFrom: input.importedFrom ?? input.mediaPath,
       providerId: runtime.config.providerId as 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr',
       endpointHost: runtime.host,
       transcriptionModel: runtime.transcriptionModel,

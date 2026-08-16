@@ -20,6 +20,7 @@ const api: OldfolioDesktopApi = {
   chooseMediaTool: (kind) => ipcRenderer.invoke('media:choose-tool', kind),
   importWhisperModel: (input) => ipcRenderer.invoke('media:import-model', input),
   transcribeMedia: (input) => ipcRenderer.invoke('media:transcribe', input),
+  transcribeOnlineMediaLocally: (input) => ipcRenderer.invoke('media:transcribe-online-locally', input),
   transcribeCloudMedia: (input) => ipcRenderer.invoke('media:transcribe-cloud-file', input),
   transcribeOnlineMedia: (input) => ipcRenderer.invoke('media:transcribe-online', input),
   retryMediaJob: (jobId) => ipcRenderer.invoke('media:retry-job', jobId),

@@ -43,6 +43,10 @@ claim that the planned 9–12 month v1 is complete.
   to create deterministic audio chunks for an online OpenAI-compatible transcription model. Chunk
   JSON artifacts are SHA-256 verified and reusable after interruption; the remote host and model are
   bound to the persisted retry request.
+- Resolve user-authorized YouTube, bilibili, and Douyin share links through a user-selected `yt-dlp`
+  executable. The controlled invocation disables browser cookies, playlists, user configuration, and
+  shell execution; the downloaded media remains bounded and is removed from transient cache after it is
+  imported into the Vault. The same URL entry can feed local Whisper or a chunk-capable cloud provider.
 - Generate revision-bound AI change sets and apply or atomically undo them through the Vault core.
 - Connect to Ollama and OpenAI-compatible providers through secret-resolver interfaces that do not
   serialize API keys into requests or Vault configuration.

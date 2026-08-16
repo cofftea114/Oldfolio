@@ -17,6 +17,7 @@ export interface MediaDeviceConfig {
   readonly version: 1;
   readonly ffmpegPath?: string;
   readonly whisperPath?: string;
+  readonly ytDlpPath?: string;
   readonly models: readonly InstalledLocalModel[];
 }
 
@@ -31,6 +32,7 @@ export interface MediaToolProbe {
 export interface MediaToolsStatus {
   readonly ffmpeg: MediaToolProbe;
   readonly whisper: MediaToolProbe;
+  readonly ytDlp: MediaToolProbe;
 }
 
 const EMPTY_CONFIG: MediaDeviceConfig = { version: 1, models: [] };
@@ -64,10 +66,12 @@ function parseConfig(source: string): MediaDeviceConfig {
   if (value.version !== 1 || !Array.isArray(value.models)) throw new Error('Invalid media device configuration.');
   const ffmpegPath = validatePath(value.ffmpegPath);
   const whisperPath = validatePath(value.whisperPath);
+  const ytDlpPath = validatePath(value.ytDlpPath);
   return {
     version: 1,
     ...(ffmpegPath ? { ffmpegPath } : {}),
     ...(whisperPath ? { whisperPath } : {}),
+    ...(ytDlpPath ? { ytDlpPath } : {}),
     models: value.models.map(validateModel),
   };
 }
@@ -92,13 +96,13 @@ export class MediaDeviceConfigStore {
     await rename(temporary, this.filePath);
   }
 
-  async setTool(kind: 'ffmpeg' | 'whisper', executablePath: string): Promise<MediaDeviceConfig> {
+  async setTool(kind: 'ffmpeg' | 'whisper' | 'yt-dlp', executablePath: string): Promise<MediaDeviceConfig> {
     const current = await this.load();
     const validatedPath = validatePath(executablePath);
     if (!validatedPath) throw new Error('Media tool path is required.');
     const updated: MediaDeviceConfig = {
       ...current,
-      ...(kind === 'ffmpeg' ? { ffmpegPath: validatedPath } : { whisperPath: validatedPath }),
+      ...(kind === 'ffmpeg' ? { ffmpegPath: validatedPath } : kind === 'whisper' ? { whisperPath: validatedPath } : { ytDlpPath: validatedPath }),
     };
     await this.save(updated);
     return updated;
@@ -133,13 +137,14 @@ export async function probeMediaTools(
   config: MediaDeviceConfig,
   runner: ProbeRunner = runControlledProcess,
 ): Promise<MediaToolsStatus> {
-  const [ffmpeg, ffprobe, whisper] = await Promise.all([
+  const [ffmpeg, ffprobe, whisper, ytDlp] = await Promise.all([
     probeOne(config.ffmpegPath, ['-version'], runner),
     probeOne(config.ffmpegPath ? deriveFfprobePath(config.ffmpegPath) : undefined, ['-version'], runner),
     probeOne(config.whisperPath, ['--help'], runner),
+    probeOne(config.ytDlpPath, ['--version'], runner),
   ]);
   const ffmpegBundle = ffmpeg.available && !ffprobe.available
     ? { ...ffmpeg, available: false, error: `ffprobe is required beside FFmpeg: ${ffprobe.error ?? ffprobe.path ?? 'not found'}` }
     : ffmpeg;
-  return { ffmpeg: ffmpegBundle, whisper };
+  return { ffmpeg: ffmpegBundle, whisper, ytDlp };
 }

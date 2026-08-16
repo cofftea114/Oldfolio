@@ -88,6 +88,20 @@ function endpointHost(endpoint: string): string {
   }
 }
 
+function isPlatformShareUrl(value: string): boolean {
+  try {
+    const candidate = /https:\/\/[^\s<>"']+/iu.exec(value.trim())?.[0] ?? value;
+    const host = new URL(candidate).hostname.toLowerCase();
+    return host === 'youtu.be' || host === 'b23.tv'
+      || host === 'youtube.com' || host.endsWith('.youtube.com')
+      || host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com')
+      || host === 'bilibili.com' || host.endsWith('.bilibili.com')
+      || host === 'douyin.com' || host.endsWith('.douyin.com');
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [vault, setVault] = useState<VaultSummary | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -140,6 +154,7 @@ export function App() {
   const [tencentSecretId, setTencentSecretId] = useState('');
   const [tencentSecretKey, setTencentSecretKey] = useState('');
   const [onlineMediaUrl, setOnlineMediaUrl] = useState('');
+  const [platformAccessConfirmed, setPlatformAccessConfirmed] = useState(false);
   const [aiBusy, setAIBusy] = useState(false);
   const [aiError, setAIError] = useState('');
   const [summaryPreparation, setSummaryPreparation] = useState<AISummaryPreparation | null>(null);
@@ -560,7 +575,7 @@ export function App() {
     setSelectedModel((current) => current || settings.models[0]?.id || '');
   }, [vault]);
 
-  const chooseMediaTool = async (kind: 'ffmpeg' | 'whisper') => {
+  const chooseMediaTool = async (kind: 'ffmpeg' | 'whisper' | 'yt-dlp') => {
     setImportError('');
     try {
       setMediaSettings(await window.oldfolio.chooseMediaTool(kind));
@@ -630,6 +645,7 @@ export function App() {
       const language = mediaLanguage.trim();
       const result = await window.oldfolio.transcribeOnlineMedia({
         url: onlineMediaUrl.trim(),
+        platformAccessConfirmed,
         ...(language && language !== 'auto' ? { language } : {}),
       });
       if (result.cancelled || !result.transcript) {
@@ -645,6 +661,41 @@ export function App() {
       const message = error instanceof Error ? error.message : '在线媒体转录失败';
       setAIError(message);
       setStatus('在线媒体转录失败，已完成分块仍会保留');
+    } finally {
+      window.clearInterval(poll);
+      await refreshMedia();
+      setImporting(false);
+    }
+  };
+
+  const transcribeOnlineMediaLocally = async () => {
+    if (!vault || !selectedModel || !onlineMediaUrl.trim() || importing) return;
+    setImporting(true);
+    setImportError('');
+    setAIError('');
+    setStatus('正在解析在线媒体，随后将使用本地 Whisper 转录…');
+    const poll = window.setInterval(() => void window.oldfolio.listMediaJobs().then(setMediaJobs), 1_000);
+    try {
+      const language = mediaLanguage.trim();
+      const result = await window.oldfolio.transcribeOnlineMediaLocally({
+        url: onlineMediaUrl.trim(),
+        modelId: selectedModel,
+        platformAccessConfirmed,
+        ...(language && language !== 'auto' ? { language } : {}),
+      });
+      if (result.cancelled || !result.transcript) {
+        setStatus('已取消在线媒体解析');
+        return;
+      }
+      await loadDocuments();
+      await openDocument(result.transcript.path);
+      setStatus(result.transcriptSource === 'embedded_subtitle'
+        ? '已提取在线视频字幕并生成笔记'
+        : '已使用本地 Whisper 转录在线视频');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '本地 Whisper 解析在线视频失败';
+      setImportError(message);
+      setStatus('在线视频本地转录失败');
     } finally {
       window.clearInterval(poll);
       await refreshMedia();
@@ -749,6 +800,7 @@ export function App() {
     && cloudTranscriptionSettings.credentialAvailable;
   const aliyunCredentialCount = [aliyunAccessKeyId, aliyunAccessKeySecret, aliyunAppKey].filter((value) => value.trim()).length;
   const tencentCredentialCount = [tencentSecretId, tencentSecretKey].filter((value) => value.trim()).length;
+  const onlineMediaIsPlatform = isPlatformShareUrl(onlineMediaUrl);
 
   const openWikiLink = (target: string) => {
     const pathTarget = target.split('#', 1)[0]?.replaceAll('\\', '/') ?? '';
@@ -849,6 +901,11 @@ export function App() {
                 <option value="online">在线语音转写</option>
               </select>
             </label>
+            <div className="tool-row">
+              <span><strong>yt-dlp</strong><small>{mediaSettings?.ytDlp.version ?? '未配置（平台分享链接需要）'}</small></span>
+              <button onClick={() => void chooseMediaTool('yt-dlp')}>{mediaSettings?.ytDlp.available ? '更换' : '选择'}</button>
+            </div>
+            <small className="model-help-note">YouTube、哔哩哔哩和抖音分享链接由你自行安装的 yt-dlp 解析。Oldfolio 不捆绑该工具，不读取浏览器 Cookie，也不处理播放列表。</small>
             {transcriptionExecutionTarget === 'local' ? <>
             <div className="tool-row">
               <span><strong>FFmpeg</strong><small>{mediaSettings?.ffmpeg.version ?? '未配置'}</small></span>
@@ -882,6 +939,17 @@ export function App() {
               {importing ? '处理中…' : '选择音视频并转录'}
             </button>
             <small className="model-help-note">视频包含 ASS、SRT、mov_text 或 WebVTT 文本字幕时会优先提取；没有可用文本字幕时才运行 Whisper。</small>
+            <div className="import-divider"><span>在线视频</span></div>
+            <label className="field-label">媒体直链或平台分享链接
+              <input disabled={importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
+            </label>
+            {onlineMediaIsPlatform && <label className="accept-license">
+              <input checked={platformAccessConfirmed} disabled={importing || !vault} onChange={(event) => setPlatformAccessConfirmed(event.target.checked)} type="checkbox" />
+              我确认有权下载并分析该视频，并遵守来源平台条款与所在地法律
+            </label>}
+            <button className="transcribe-button" disabled={!vault || !selectedModel || !onlineMediaUrl.trim() || !mediaSettings?.ffmpeg.available || !mediaSettings.whisper.available || (onlineMediaIsPlatform && (!mediaSettings.ytDlp.available || !platformAccessConfirmed)) || importing} onClick={() => void transcribeOnlineMediaLocally()}>
+              {importing ? '处理中…' : '使用本地 Whisper 分析在线视频'}
+            </button>
             </> : <>
               <p className="model-help">转录和摘要互不绑定。可单独选择 OpenAI-compatible、阿里云通义听悟或腾讯云录音文件识别。</p>
               <label className="field-label">转录服务
@@ -925,12 +993,17 @@ export function App() {
               </button>
               {cloudTranscriptionProvider === 'aliyun-tingwu' && <small className="model-help-note">通义听悟官方离线 API 只接受公网 HTTP(S) URL，不接收本地文件。本地文件可改选 OpenAI-compatible 或腾讯云；通义听悟请使用下方公开直链。</small>}
               <div className="import-divider"><span>在线媒体</span></div>
-              <label className="field-label">公开 HTTPS 音视频直链
-                <input disabled={aiBusy || importing || !vault} onChange={(event) => setOnlineMediaUrl(event.target.value)} placeholder="https://example.com/video.mp4" type="url" value={onlineMediaUrl} />
+              <label className="field-label">媒体直链或平台分享链接
+                <input disabled={aiBusy || importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
               </label>
-              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeOnlineMedia()}>
+              {onlineMediaIsPlatform && <label className="accept-license">
+                <input checked={platformAccessConfirmed} disabled={aiBusy || importing || !vault} onChange={(event) => setPlatformAccessConfirmed(event.target.checked)} type="checkbox" />
+                我确认有权下载并分析该视频，并遵守来源平台条款与所在地法律
+              </label>}
+              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available || (onlineMediaIsPlatform && (!mediaSettings.ytDlp.available || !platformAccessConfirmed || cloudTranscriptionProvider === 'aliyun-tingwu'))} onClick={() => void transcribeOnlineMedia()}>
                 {importing ? '处理中…' : '分析在线音视频'}
               </button>
+              {onlineMediaIsPlatform && cloudTranscriptionProvider === 'aliyun-tingwu' && <small className="model-help-note">通义听悟只接受公开媒体文件 URL，不能使用平台分享页。请改选本地 Whisper、腾讯云或 OpenAI-compatible。</small>}
               {!mediaSettings?.ffmpeg.available && <small className="model-help-note">请先切回本地转录配置 FFmpeg，用于字幕检测和受控音频分块。</small>}
             </>}
             {mediaJobs.slice(0, 3).map((job) => (

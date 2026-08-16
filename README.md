@@ -94,15 +94,17 @@ it is never written to the Vault, SQLite index, device config, or logs.
 
 ## Online media analysis
 
-1. Configure FFmpeg under **Local transcription**. `whisper-cli` and a GGML model are not required for
-   online speech transcription.
-2. In **Transcription**, choose OpenAI-compatible transcription, Alibaba Cloud Tingwu, or Tencent Cloud
+1. Configure FFmpeg under **Transcription**. To analyze a YouTube, bilibili, or Douyin share link,
+   install `yt-dlp` yourself and select its executable in the same module. Oldfolio invokes it with
+   browser cookies, playlists, and user config disabled, after an explicit authorization confirmation.
+2. Choose local Whisper to process a direct media URL or supported platform share link entirely with
+   the configured local model. Alternatively, choose OpenAI-compatible transcription, Alibaba Cloud Tingwu, or Tencent Cloud
    recording-file recognition. OpenAI-compatible transcription reuses the explicitly confirmed online
    endpoint/key but has its own model selection. Tingwu accepts only a server-accessible public URL;
    Tencent receives local 64-kbps AAC chunks kept below its raw-data request limit.
-3. Paste a public direct HTTPS media URL such as an `.mp4`, `.m4a`, or `.mp3` URL under **Online media**.
-   Web pages, platform share pages, authenticated URLs, private-network targets, embedded credentials,
-   hidden APIs, and Cookie extraction are intentionally unsupported.
+3. Paste a public direct HTTPS media URL or a YouTube, bilibili, or Douyin video share link under
+   **Online video**. Authenticated/private content, browser Cookie extraction, playlists, private-network
+   targets, and embedded URL credentials remain unsupported.
 4. Oldfolio streams at most 2 GB into a content-addressed Vault asset. It first extracts a supported
    embedded text subtitle locally. If none is available, FFmpeg creates bounded audio chunks and the
    configured chunk-capable provider receives only those chunks. Completed chunk artifacts are hashed so

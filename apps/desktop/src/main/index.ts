@@ -1,4 +1,4 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
@@ -20,6 +20,8 @@ import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './clou
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
+import { detectPlatformMediaUrl, downloadPlatformMedia, extractSharedMediaUrl } from './platform-media.js';
+import { downloadRemoteMediaAsset } from './remote-media.js';
 import {
   OnlineAIConfigStore,
   OnlineAIService,
@@ -357,9 +359,9 @@ function registerIpc(): void {
   });
   ipcMain.handle('media:choose-tool', async (event, kind: unknown) => {
     assertTrustedSender(event);
-    if (kind !== 'ffmpeg' && kind !== 'whisper') throw new TypeError('Invalid media tool kind');
+    if (kind !== 'ffmpeg' && kind !== 'whisper' && kind !== 'yt-dlp') throw new TypeError('Invalid media tool kind');
     const selection = await dialog.showOpenDialog(mainWindow!, {
-      title: kind === 'ffmpeg' ? '选择 FFmpeg 可执行文件' : '选择 whisper-cli 可执行文件',
+      title: kind === 'ffmpeg' ? '选择 FFmpeg 可执行文件' : kind === 'whisper' ? '选择 whisper-cli 可执行文件' : '选择 yt-dlp 可执行文件',
       properties: ['openFile'],
       filters: process.platform === 'win32' ? [{ name: '可执行文件', extensions: ['exe'] }] : [],
       buttonLabel: '验证并使用',
@@ -369,11 +371,12 @@ function registerIpc(): void {
     const current = await requireMediaDeviceConfig().load();
     const candidate = {
       ...current,
-      ...(kind === 'ffmpeg' ? { ffmpegPath: executablePath } : { whisperPath: executablePath }),
+      ...(kind === 'ffmpeg' ? { ffmpegPath: executablePath } : kind === 'whisper' ? { whisperPath: executablePath } : { ytDlpPath: executablePath }),
     };
     const status = await probeMediaTools(candidate);
-    if (!(kind === 'ffmpeg' ? status.ffmpeg.available : status.whisper.available)) {
-      throw new Error(kind === 'ffmpeg' ? status.ffmpeg.error : status.whisper.error);
+    const selectedStatus = kind === 'ffmpeg' ? status.ffmpeg : kind === 'whisper' ? status.whisper : status.ytDlp;
+    if (!selectedStatus.available) {
+      throw new Error(selectedStatus.error);
     }
     await requireMediaDeviceConfig().setTool(kind, executablePath);
     return mediaSettingsSummary();
@@ -450,21 +453,50 @@ function registerIpc(): void {
     if (
       typeof value.url !== 'string' || value.url.length > 4_096
       || (value.language !== undefined && typeof value.language !== 'string')
+      || (value.platformAccessConfirmed !== undefined && typeof value.platformAccessConfirmed !== 'boolean')
     ) throw new TypeError('A direct HTTPS media URL is required');
     const controller = new AbortController();
     activeMediaTasks.add(controller);
     try {
-      const result = await transcribeOnlineMediaUrl(
-        requireRepository(),
-        requireMediaJobs(),
-        requireMediaDeviceConfig(),
-        requireCloudTranscription(),
-        {
-          url: value.url.trim(),
-          ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
-        },
-        { fetcher: chromiumNetworkFetch, signal: controller.signal },
-      );
+      const sourceUrl = extractSharedMediaUrl(value.url);
+      const platform = detectPlatformMediaUrl(sourceUrl);
+      let temporaryDirectory: string | undefined;
+      let result: Awaited<ReturnType<typeof transcribeOnlineMediaUrl>>;
+      try {
+        if (platform) {
+          const cloud = await requireCloudTranscription().settings();
+          if (cloud.inputMode === 'remote-url') throw new Error('通义听悟不能直接处理平台分享页，请使用公开媒体直链或改选本地 Whisper / 腾讯云 / OpenAI-compatible。');
+          const mediaConfig = await requireMediaDeviceConfig().load();
+          if (!mediaConfig.ytDlpPath || !mediaConfig.ffmpegPath) throw new Error('请先配置 yt-dlp 和 FFmpeg。');
+          const downloaded = await downloadPlatformMedia(sourceUrl, {
+            ytDlpPath: mediaConfig.ytDlpPath,
+            ffmpegPath: mediaConfig.ffmpegPath,
+            cacheRoot: join(requireRepository().root, '.oldfolio', 'cache', 'platform-media'),
+            authorizationConfirmed: value.platformAccessConfirmed === true,
+          }, { signal: controller.signal });
+          temporaryDirectory = downloaded.temporaryDirectory;
+          result = await transcribeCloudMediaFile(
+            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(),
+            {
+              mediaPath: downloaded.mediaPath,
+              importedFrom: downloaded.sourceUrl,
+              ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+            },
+            { signal: controller.signal },
+          );
+        } else {
+          result = await transcribeOnlineMediaUrl(
+            requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(),
+            {
+              url: sourceUrl,
+              ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+            },
+            { fetcher: chromiumNetworkFetch, signal: controller.signal },
+          );
+        }
+      } finally {
+        if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+      }
       return {
         cancelled: false,
         jobId: result.jobId,
@@ -472,6 +504,56 @@ function registerIpc(): void {
         transcript: await readDocument(result.transcriptPath),
       };
     } finally {
+      activeMediaTasks.delete(controller);
+    }
+  });
+  ipcMain.handle('media:transcribe-online-locally', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid local online-media request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.url !== 'string' || value.url.length > 4_096 || typeof value.modelId !== 'string'
+      || typeof value.platformAccessConfirmed !== 'boolean'
+      || (value.language !== undefined && typeof value.language !== 'string')
+    ) throw new TypeError('A media URL and local Whisper model are required');
+    const controller = new AbortController();
+    activeMediaTasks.add(controller);
+    let temporaryDirectory: string | undefined;
+    try {
+      const sourceUrl = extractSharedMediaUrl(value.url);
+      const platform = detectPlatformMediaUrl(sourceUrl);
+      let mediaPath: string;
+      if (platform) {
+        const mediaConfig = await requireMediaDeviceConfig().load();
+        if (!mediaConfig.ytDlpPath || !mediaConfig.ffmpegPath) throw new Error('请先配置 yt-dlp 和 FFmpeg。');
+        const downloaded = await downloadPlatformMedia(sourceUrl, {
+          ytDlpPath: mediaConfig.ytDlpPath,
+          ffmpegPath: mediaConfig.ffmpegPath,
+          cacheRoot: join(requireRepository().root, '.oldfolio', 'cache', 'platform-media'),
+          authorizationConfirmed: value.platformAccessConfirmed,
+        }, { signal: controller.signal });
+        mediaPath = downloaded.mediaPath;
+        temporaryDirectory = downloaded.temporaryDirectory;
+      } else {
+        mediaPath = (await downloadRemoteMediaAsset(sourceUrl, requireRepository().root, {
+          fetcher: chromiumNetworkFetch, signal: controller.signal,
+        })).absolutePath;
+      }
+      const result = await transcribeMediaFile(requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), {
+        mediaPath,
+        vaultRoot: requireRepository().root,
+        modelId: value.modelId,
+        importedFrom: sourceUrl,
+        ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
+      }, { signal: controller.signal });
+      return {
+        cancelled: false,
+        jobId: result.jobId,
+        transcriptSource: result.transcriptSource,
+        transcript: await readDocument(result.transcriptPath),
+      };
+    } finally {
+      if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
       activeMediaTasks.delete(controller);
     }
   });
@@ -749,7 +831,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;
