@@ -406,10 +406,22 @@ describe('AI security boundaries', () => {
             readonly items?: { readonly enum?: readonly string[] };
           };
           const evidenceIds = evidenceIdSchema.items?.enum ?? [];
+          const dataMessage = request.messages.at(-1)?.content ?? '';
+          const serializedEnvelope = dataMessage
+            .replace(/^UNTRUSTED_DATA_JSON\n/u, '')
+            .replace(/\nEND_UNTRUSTED_DATA_JSON$/u, '');
+          const envelope = JSON.parse(serializedEnvelope) as {
+            readonly records: readonly { readonly sourceId: string; readonly content: string }[];
+          };
+          const visibleIds = [...new Set(envelope.records.flatMap((record) => (
+            record.content.match(/segment-\d{5}/gu) ?? []
+          )))];
+          expect(visibleIds.filter((id) => !evidenceIds.includes(id))).toEqual([]);
+          const returnedEvidenceIds = readerCallCount === 1 ? ['segment-00043'] : evidenceIds;
           return Promise.resolve({
             content: JSON.stringify({
               notes: `第 ${readerCallCount} 个阅读窗口保留的独立观点。`,
-              evidenceIds,
+              evidenceIds: returnedEvidenceIds,
             }),
             model: 'test-model', finishReason: 'stop',
           });

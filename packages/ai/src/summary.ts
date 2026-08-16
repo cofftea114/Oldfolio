@@ -230,9 +230,9 @@ function detectSummaryOutputLanguage(prepared: Pick<PreparedTranscriptSummary, '
 
 function outputLanguageInstruction(language: SummaryOutputLanguage): string {
   if (language === 'Simplified Chinese') {
-    return 'Every generated text field must use Simplified Chinese, including working notes, title, overview, key points, concept names, and explanations. Never answer in English.';
+    return 'Every generated text field must use Simplified Chinese, including working notes, title, overview, section headings, points, takeaways, and uncertainties. Never answer in English.';
   }
-  return 'Every generated text field must use English, including working notes, title, overview, key points, concept names, and explanations.';
+  return 'Every generated text field must use English, including working notes, title, overview, section headings, points, takeaways, and uncertainties.';
 }
 
 function displayTimestamp(milliseconds: number): string {
@@ -441,6 +441,13 @@ function finalEvidencePayload(
   return JSON.stringify({ documentPath: prepared.workingDocumentPath, readingCheckpoints, evidence: selected });
 }
 
+function readerWindowContent(content: string, allowedEvidenceIds: readonly string[]): string {
+  const allowed = new Set(allowedEvidenceIds);
+  return content.replace(/^\[(segment-\d{5})(\s+.+?)\]/gmu, (label, id: string, context: string) => (
+    allowed.has(id) ? label : `[context${context}]`
+  ));
+}
+
 async function readDocumentWindow(
   provider: AIProvider,
   config: AIProviderConfig,
@@ -457,8 +464,9 @@ async function readDocumentWindow(
   readonly evidenceIds: readonly string[];
   readonly completion: AICompletion;
 }> {
+  const knownEvidenceIds = [...new Set([...previousEvidenceIds, ...window.evidenceIds])];
   const allowedEvidenceIds = selectRepresentativeEvidenceIds(
-    [...previousEvidenceIds, ...window.evidenceIds],
+    knownEvidenceIds,
     MAX_READER_EVIDENCE_IDS,
   );
   const task = [
@@ -480,12 +488,15 @@ async function readDocumentWindow(
     {
       sourceId: `${prepared.workingDocumentPath}#window-${windowIndex + 1}`,
       mediaType: 'text/plain',
-      content: window.content,
+      content: readerWindowContent(window.content, allowedEvidenceIds),
     },
     {
       sourceId: `${prepared.workingDocumentPath}#working-notes`,
       mediaType: 'application/json',
-      content: JSON.stringify({ notes: previousNotes, evidenceIds: previousEvidenceIds }),
+      content: JSON.stringify({
+        notes: previousNotes,
+        evidenceIds: previousEvidenceIds.filter((id) => allowedEvidenceIds.includes(id)),
+      }),
     },
   ]);
   const completion = await provider.complete(config, {
@@ -498,7 +509,7 @@ async function readDocumentWindow(
   }, context);
   const modelResult = parseStructuredOutput(completion.content, modelReaderNotesSchema);
   for (const id of modelResult.evidenceIds) {
-    if (!allowedEvidenceIds.includes(id)) throw new Error(`The document reader cited unknown transcript evidence "${id}".`);
+    if (!knownEvidenceIds.includes(id)) throw new Error(`The document reader cited unknown transcript evidence "${id}".`);
   }
   const result = readerNotesSchema.parse({
     ...modelResult,
