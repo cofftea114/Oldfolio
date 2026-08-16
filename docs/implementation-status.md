@@ -62,8 +62,8 @@ claim that the planned 9–12 month v1 is complete.
   and apply or undo the resulting L1/L2 change set.
 - Configure transcription and summary independently for local or online execution. Online summaries
   provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
-  Gemini. Online transcription supports OpenAI-compatible audio models, Alibaba Cloud Tingwu's public-URL
-  offline task protocol, and Tencent Cloud recording-file recognition with signed asynchronous polling.
+  Gemini. Online transcription supports OpenAI-compatible audio models and Tencent Cloud
+  recording-file recognition with signed asynchronous polling.
   The user must explicitly confirm the summary destination host and can inspect the complete summary
   working document before it is sent. Only endpoints, provider/model settings, and opaque secret references are serialized.
   The current API Key implementation is deliberately session-only main-process memory: it is cleared

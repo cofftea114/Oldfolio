@@ -144,11 +144,6 @@ export function App() {
   const [onlineTranscriptionModel, setOnlineTranscriptionModel] = useState('gpt-4o-mini-transcribe');
   const [cloudTranscriptionSettings, setCloudTranscriptionSettings] = useState<CloudTranscriptionSettingsSummary | null>(null);
   const [cloudTranscriptionProvider, setCloudTranscriptionProvider] = useState<CloudTranscriptionProviderId>('openai-compatible');
-  const [aliyunRegion, setAliyunRegion] = useState('cn-beijing');
-  const [aliyunLanguage, setAliyunLanguage] = useState('auto');
-  const [aliyunAccessKeyId, setAliyunAccessKeyId] = useState('');
-  const [aliyunAccessKeySecret, setAliyunAccessKeySecret] = useState('');
-  const [aliyunAppKey, setAliyunAppKey] = useState('');
   const [tencentRegion, setTencentRegion] = useState('ap-guangzhou');
   const [tencentEngine, setTencentEngine] = useState('16k_zh_en');
   const [tencentSecretId, setTencentSecretId] = useState('');
@@ -305,10 +300,6 @@ export function App() {
       setCloudTranscriptionSettings(cloudSettings);
       setCloudTranscriptionProvider(cloudSettings.providerId);
       if (cloudSettings.providerId === 'openai-compatible') setOnlineTranscriptionModel(cloudSettings.model);
-      if (cloudSettings.providerId === 'aliyun-tingwu') {
-        setAliyunRegion(cloudSettings.region || 'cn-beijing');
-        setAliyunLanguage(cloudSettings.model || 'auto');
-      }
       if (cloudSettings.providerId === 'tencent-asr') {
         setTencentRegion(cloudSettings.region || 'ap-guangzhou');
         setTencentEngine(cloudSettings.model || '16k_zh_en');
@@ -410,26 +401,14 @@ export function App() {
             providerId: cloudTranscriptionProvider,
             model: onlineTranscriptionModel,
           })
-        : cloudTranscriptionProvider === 'aliyun-tingwu'
-          ? await window.oldfolio.saveCloudTranscriptionSettings({
-              providerId: cloudTranscriptionProvider,
-              region: aliyunRegion,
-              sourceLanguage: aliyunLanguage,
-              accessKeyId: aliyunAccessKeyId,
-              accessKeySecret: aliyunAccessKeySecret,
-              appKey: aliyunAppKey,
-            })
-          : await window.oldfolio.saveCloudTranscriptionSettings({
-              providerId: cloudTranscriptionProvider,
-              region: tencentRegion,
-              engineModelType: tencentEngine,
-              secretId: tencentSecretId,
-              secretKey: tencentSecretKey,
-            });
+        : await window.oldfolio.saveCloudTranscriptionSettings({
+            providerId: cloudTranscriptionProvider,
+            region: tencentRegion,
+            engineModelType: tencentEngine,
+            secretId: tencentSecretId,
+            secretKey: tencentSecretKey,
+          });
       setCloudTranscriptionSettings(settings);
-      setAliyunAccessKeyId('');
-      setAliyunAccessKeySecret('');
-      setAliyunAppKey('');
       setTencentSecretId('');
       setTencentSecretKey('');
       setStatus('在线转录配置已保存；凭据仅保留在当前运行会话');
@@ -798,7 +777,6 @@ export function App() {
   );
   const savedCloudCredentialsAvailable = cloudTranscriptionSettings?.providerId === cloudTranscriptionProvider
     && cloudTranscriptionSettings.credentialAvailable;
-  const aliyunCredentialCount = [aliyunAccessKeyId, aliyunAccessKeySecret, aliyunAppKey].filter((value) => value.trim()).length;
   const tencentCredentialCount = [tencentSecretId, tencentSecretKey].filter((value) => value.trim()).length;
   const onlineMediaIsPlatform = isPlatformShareUrl(onlineMediaUrl);
 
@@ -951,11 +929,10 @@ export function App() {
               {importing ? '处理中…' : '使用本地 Whisper 分析在线视频'}
             </button>
             </> : <>
-              <p className="model-help">转录和摘要互不绑定。可单独选择 OpenAI-compatible、阿里云通义听悟或腾讯云录音文件识别。</p>
+              <p className="model-help">转录和摘要互不绑定。可单独选择 OpenAI-compatible 或腾讯云录音文件识别。</p>
               <label className="field-label">转录服务
                 <select disabled={aiBusy || importing} value={cloudTranscriptionProvider} onChange={(event) => setCloudTranscriptionProvider(event.target.value as CloudTranscriptionProviderId)}>
                   <option value="openai-compatible">OpenAI-compatible 转录</option>
-                  <option value="aliyun-tingwu">阿里云·通义听悟</option>
                   <option value="tencent-asr">腾讯云·录音文件识别</option>
                 </select>
               </label>
@@ -964,15 +941,6 @@ export function App() {
                   <input value={onlineTranscriptionModel} onChange={(event) => setOnlineTranscriptionModel(event.target.value)} placeholder="gpt-4o-mini-transcribe" />
                 </label>
                 <small className="model-help-note">使用“摘要模块”在线服务中配置的 endpoint 和会话 API Key，转录模型在此独立选择。</small>
-              </>}
-              {cloudTranscriptionProvider === 'aliyun-tingwu' && <>
-                <label className="field-label">地域<input value={aliyunRegion} onChange={(event) => setAliyunRegion(event.target.value)} placeholder="cn-beijing" /></label>
-                <label className="field-label">源语言<input value={aliyunLanguage} onChange={(event) => setAliyunLanguage(event.target.value)} placeholder="auto / cn / en" /></label>
-                <label className="field-label">AccessKey ID<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 AccessKey ID'} value={aliyunAccessKeyId} onChange={(event) => setAliyunAccessKeyId(event.target.value)} /></label>
-                <label className="field-label">AccessKey Secret<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 AccessKey Secret'} type="password" value={aliyunAccessKeySecret} onChange={(event) => setAliyunAccessKeySecret(event.target.value)} /></label>
-                <label className="field-label">听悟 AppKey<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入听悟 AppKey'} type="password" value={aliyunAppKey} onChange={(event) => setAliyunAppKey(event.target.value)} /></label>
-                {savedCloudCredentialsAvailable && <small className="model-help-note">凭据已保留在主进程的当前会话中。输入框为空是安全处理，不代表配置丢失；留空再保存不会覆盖凭据。</small>}
-                <small className="model-help-note">通义听悟离线转写只接受服务端可访问的公开 HTTPS 直链；Oldfolio 不会上传本地文件到官方服务器。</small>
               </>}
               {cloudTranscriptionProvider === 'tencent-asr' && <>
                 <label className="field-label">地域<input value={tencentRegion} onChange={(event) => setTencentRegion(event.target.value)} placeholder="ap-guangzhou" /></label>
@@ -983,15 +951,13 @@ export function App() {
               </>}
               <button className="transcribe-button" disabled={aiBusy || (
                 cloudTranscriptionProvider === 'openai-compatible' ? !onlineTranscriptionModel.trim() :
-                cloudTranscriptionProvider === 'aliyun-tingwu' ? !aliyunRegion.trim() || !aliyunLanguage.trim() || (aliyunCredentialCount !== 0 && aliyunCredentialCount !== 3) || (!savedCloudCredentialsAvailable && aliyunCredentialCount !== 3) :
                 !tencentRegion.trim() || !tencentEngine.trim() || (tencentCredentialCount !== 0 && tencentCredentialCount !== 2) || (!savedCloudCredentialsAvailable && tencentCredentialCount !== 2)
               )} onClick={() => void saveCloudTranscriptionSettings()}>保存在线转录配置</button>
               {cloudTranscriptionSettings?.configured && <small className="model-help-note">已选：{cloudTranscriptionSettings.endpointHost} · {cloudTranscriptionSettings.model} · 凭据 {cloudTranscriptionSettings.credentialAvailable ? '本次会话可用' : '需重新输入'}</small>}
               <div className="import-divider"><span>本地媒体</span></div>
-              <button className="transcribe-button" disabled={aiBusy || importing || !vault || cloudTranscriptionProvider === 'aliyun-tingwu' || !savedCloudCredentialsAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeCloudMedia()}>
+              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !savedCloudCredentialsAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeCloudMedia()}>
                 {importing ? '处理中…' : '选择本地音视频并在线转录'}
               </button>
-              {cloudTranscriptionProvider === 'aliyun-tingwu' && <small className="model-help-note">通义听悟官方离线 API 只接受公网 HTTP(S) URL，不接收本地文件。本地文件可改选 OpenAI-compatible 或腾讯云；通义听悟请使用下方公开直链。</small>}
               <div className="import-divider"><span>在线媒体</span></div>
               <label className="field-label">媒体直链或平台分享链接
                 <input disabled={aiBusy || importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
@@ -1000,10 +966,9 @@ export function App() {
                 <input checked={platformAccessConfirmed} disabled={aiBusy || importing || !vault} onChange={(event) => setPlatformAccessConfirmed(event.target.checked)} type="checkbox" />
                 我确认有权下载并分析该视频，并遵守来源平台条款与所在地法律
               </label>}
-              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available || (onlineMediaIsPlatform && (!mediaSettings.ytDlp.available || !platformAccessConfirmed || cloudTranscriptionProvider === 'aliyun-tingwu'))} onClick={() => void transcribeOnlineMedia()}>
+              <button className="transcribe-button" disabled={aiBusy || importing || !vault || !onlineMediaUrl.trim() || !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available || (onlineMediaIsPlatform && (!mediaSettings.ytDlp.available || !platformAccessConfirmed))} onClick={() => void transcribeOnlineMedia()}>
                 {importing ? '处理中…' : '分析在线音视频'}
               </button>
-              {onlineMediaIsPlatform && cloudTranscriptionProvider === 'aliyun-tingwu' && <small className="model-help-note">通义听悟只接受公开媒体文件 URL，不能使用平台分享页。请改选本地 Whisper、腾讯云或 OpenAI-compatible。</small>}
               {!mediaSettings?.ffmpeg.available && <small className="model-help-note">请先切回本地转录配置 FFmpeg，用于字幕检测和受控音频分块。</small>}
             </>}
             {mediaJobs.slice(0, 3).map((job) => (

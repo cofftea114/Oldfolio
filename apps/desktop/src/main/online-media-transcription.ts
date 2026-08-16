@@ -55,7 +55,7 @@ export async function transcribeOnlineMediaUrl(
       sourceKind: 'remote-url',
       sourceTitle: asset.originalName,
       importedFrom: asset.finalUrl,
-      providerId: runtime.config.providerId as 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr',
+      providerId: runtime.config.providerId as 'openai-compatible' | 'tencent-asr',
       endpointHost: runtime.host,
       transcriptionModel: runtime.transcriptionModel,
       secretRef: runtime.config.secretRef ?? '',
@@ -78,9 +78,6 @@ export async function transcribeCloudMediaFile(
   const config = await deviceConfig.load();
   if (!config.ffmpegPath) throw new Error('请先配置 FFmpeg，用于字幕检测和受控音频分块。');
   const runtime = await cloudTranscription.runtime(options.signal);
-  if (runtime.inputMode === 'remote-url') {
-    throw new Error('通义听悟官方离线转写 API 不接收本地文件；请使用公开 HTTPS 直链，或改选 OpenAI-compatible / 腾讯云。');
-  }
   const asset = await importMediaAsset(input.mediaPath, repository.root);
   const job = await jobs.create({
     sourceUri: asset.vaultPath,
@@ -90,7 +87,7 @@ export async function transcribeCloudMediaFile(
       sourceKind: input.importedFrom ? 'remote-url' : 'local-file',
       sourceTitle: asset.originalName,
       importedFrom: input.importedFrom ?? input.mediaPath,
-      providerId: runtime.config.providerId as 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr',
+      providerId: runtime.config.providerId as 'openai-compatible' | 'tencent-asr',
       endpointHost: runtime.host,
       transcriptionModel: runtime.transcriptionModel,
       secretRef: runtime.config.secretRef ?? '',
@@ -162,18 +159,6 @@ export async function resumeOnlineMediaTranscription(
 
     async function transcribeWithOnlineProvider(): Promise<AITranscriptionResult> {
       const durationMs = await probeMediaDuration(asset.absolutePath, config.ffmpegPath!, runner, options.signal);
-      if (request.inputMode === 'remote-url') {
-        if (!runtime.provider.transcribe) throw new Error('当前云转录 Provider 不支持音视频转写。');
-        await jobs.checkpoint(job.id, 'transcribing', 0.2, { chunkIndex: 0, chunkCount: 1 });
-        const result = await runtime.provider.transcribe(runtime.config, {
-          model: request.transcriptionModel,
-          mediaUri: request.importedFrom,
-          durationMs,
-          ...(request.language ? { language: request.language } : {}),
-        }, runtime.context);
-        await jobs.checkpoint(job.id, 'transcribing', 0.8, { chunkIndex: 0, chunkCount: 1 });
-        return result;
-      }
       const chunks = Math.ceil(durationMs / request.chunkDurationMs);
       const completedChunks = job.checkpoints.flatMap((checkpoint) => (
         checkpoint.stage === 'transcribing' && checkpoint.chunkIndex !== undefined && checkpoint.artifactHash

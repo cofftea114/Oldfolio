@@ -464,8 +464,6 @@ function registerIpc(): void {
       let result: Awaited<ReturnType<typeof transcribeOnlineMediaUrl>>;
       try {
         if (platform) {
-          const cloud = await requireCloudTranscription().settings();
-          if (cloud.inputMode === 'remote-url') throw new Error('通义听悟不能直接处理平台分享页，请使用公开媒体直链或改选本地 Whisper / 腾讯云 / OpenAI-compatible。');
           const mediaConfig = await requireMediaDeviceConfig().load();
           if (!mediaConfig.ytDlpPath || !mediaConfig.ffmpegPath) throw new Error('请先配置 yt-dlp 和 FFmpeg。');
           const downloaded = await downloadPlatformMedia(sourceUrl, {
@@ -739,14 +737,6 @@ function registerIpc(): void {
     if (value.providerId === 'openai-compatible' && typeof value.model === 'string') {
       return requireCloudTranscription().configure({ providerId: value.providerId, model: value.model });
     }
-    if (
-      value.providerId === 'aliyun-tingwu' && typeof value.region === 'string'
-      && typeof value.sourceLanguage === 'string' && typeof value.accessKeyId === 'string'
-      && typeof value.accessKeySecret === 'string' && typeof value.appKey === 'string'
-    ) return requireCloudTranscription().configure({
-      providerId: value.providerId, region: value.region, sourceLanguage: value.sourceLanguage,
-      accessKeyId: value.accessKeyId, accessKeySecret: value.accessKeySecret, appKey: value.appKey,
-    });
     if (
       value.providerId === 'tencent-asr' && typeof value.region === 'string'
       && typeof value.engineModelType === 'string' && typeof value.secretId === 'string' && typeof value.secretKey === 'string'

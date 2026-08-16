@@ -2,14 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { AliyunTingwuProvider, TencentCloudASRProvider } from '@oldfolio/ai';
+import { TencentCloudASRProvider } from '@oldfolio/ai';
 import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfolio/domain';
 
 import type { OnlineAIService, OnlineMediaReader, SessionSecretStore } from './online-ai.js';
 
-export type CloudTranscriptionProviderId = 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr';
+export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
 
-const ALIYUN_SECRET_REF = 'session:aliyun-tingwu';
 const TENCENT_SECRET_REF = 'session:tencent-asr';
 
 export interface CloudTranscriptionConfig {
@@ -24,19 +23,11 @@ export interface CloudTranscriptionSettings extends CloudTranscriptionConfig {
   readonly configured: boolean;
   readonly credentialAvailable: boolean;
   readonly endpointHost: string;
-  readonly inputMode: 'chunks' | 'remote-url';
+  readonly inputMode: 'chunks';
 }
 
 export type ConfigureCloudTranscriptionInput =
   | { readonly providerId: 'openai-compatible'; readonly model: string }
-  | {
-      readonly providerId: 'aliyun-tingwu';
-      readonly region: string;
-      readonly sourceLanguage: string;
-      readonly accessKeyId: string;
-      readonly accessKeySecret: string;
-      readonly appKey: string;
-    }
   | {
       readonly providerId: 'tencent-asr';
       readonly region: string;
@@ -51,7 +42,7 @@ export interface CloudTranscriptionRuntime {
   readonly context: AIInvocationContext;
   readonly transcriptionModel: string;
   readonly host: string;
-  readonly inputMode: 'chunks' | 'remote-url';
+  readonly inputMode: 'chunks';
 }
 
 const DEFAULT_CONFIG: CloudTranscriptionConfig = {
@@ -68,13 +59,7 @@ function bounded(value: string, label: string, max = 256): string {
   return normalized;
 }
 
-function endpoint(config: CloudTranscriptionConfig): { host: string; href: string; inputMode: 'chunks' | 'remote-url' } {
-  if (config.providerId === 'aliyun-tingwu') {
-    const region = bounded(config.region || 'cn-beijing', '通义听悟地域', 64);
-    if (!/^cn-[a-z0-9-]+$/u.test(region)) throw new Error('通义听悟地域无效。');
-    const host = `tingwu.${region}.aliyuncs.com`;
-    return { host, href: `https://${host}/`, inputMode: 'remote-url' };
-  }
+function endpoint(config: CloudTranscriptionConfig): { host: string; href: string; inputMode: 'chunks' } {
   if (config.providerId === 'tencent-asr') return { host: 'asr.tencentcloudapi.com', href: 'https://asr.tencentcloudapi.com/', inputMode: 'chunks' };
   return { host: '', href: '', inputMode: 'chunks' };
 }
@@ -83,12 +68,10 @@ function parseConfig(source: string): CloudTranscriptionConfig {
   const value = JSON.parse(source) as Partial<CloudTranscriptionConfig>;
   if (
     value.version !== 1
-    || (value.providerId !== 'openai-compatible' && value.providerId !== 'aliyun-tingwu' && value.providerId !== 'tencent-asr')
+    || (value.providerId !== 'openai-compatible' && value.providerId !== 'tencent-asr')
     || typeof value.model !== 'string' || typeof value.region !== 'string' || typeof value.secretRef !== 'string'
   ) throw new Error('云转录设备配置无效。');
-  const expectedRef = value.providerId === 'aliyun-tingwu'
-    ? ALIYUN_SECRET_REF
-    : value.providerId === 'tencent-asr' ? TENCENT_SECRET_REF : 'session:online-openai-compatible';
+  const expectedRef = value.providerId === 'tencent-asr' ? TENCENT_SECRET_REF : 'session:online-openai-compatible';
   if (value.secretRef !== expectedRef) throw new Error('云转录密钥引用无效。');
   const config = { version: 1, providerId: value.providerId, model: bounded(value.model, '云转录模型'), region: value.region.trim(), secretRef: expectedRef } as const;
   endpoint(config);
@@ -100,7 +83,10 @@ export class CloudTranscriptionConfigStore {
 
   async load(): Promise<CloudTranscriptionConfig> {
     try {
-      return parseConfig(await readFile(this.filePath, 'utf8'));
+      const source = await readFile(this.filePath, 'utf8');
+      const persisted = JSON.parse(source) as { readonly providerId?: unknown };
+      if (persisted.providerId === 'aliyun-tingwu') return this.save(DEFAULT_CONFIG);
+      return parseConfig(source);
     } catch (error: unknown) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return DEFAULT_CONFIG;
       throw error;
@@ -152,22 +138,6 @@ export class CloudTranscriptionService {
     let config: CloudTranscriptionConfig;
     if (input.providerId === 'openai-compatible') {
       config = { version: 1, providerId: input.providerId, model: bounded(input.model, 'OpenAI 转录模型'), region: '', secretRef: 'session:online-openai-compatible' };
-    } else if (input.providerId === 'aliyun-tingwu') {
-      const region = bounded(input.region, '通义听悟地域', 64);
-      config = { version: 1, providerId: input.providerId, model: bounded(input.sourceLanguage, '通义听悟源语言', 64), region, secretRef: ALIYUN_SECRET_REF };
-      endpoint(config);
-      const credentialValues = [input.accessKeyId.trim(), input.accessKeySecret.trim(), input.appKey.trim()];
-      const provided = credentialValues.filter(Boolean).length;
-      if (provided > 0 && provided < credentialValues.length) throw new Error('请完整填写 AccessKey ID、AccessKey Secret 和听悟 AppKey。');
-      if (provided === credentialValues.length) {
-        this.secrets.set(ALIYUN_SECRET_REF, JSON.stringify({
-          accessKeyId: bounded(input.accessKeyId, 'AccessKey ID', 512),
-          accessKeySecret: bounded(input.accessKeySecret, 'AccessKey Secret', 512),
-          appKey: bounded(input.appKey, '听悟 AppKey', 512),
-        }));
-      } else if (!this.secrets.get(ALIYUN_SECRET_REF)) {
-        throw new Error('请填写通义听悟凭据。');
-      }
     } else {
       config = { version: 1, providerId: input.providerId, model: bounded(input.engineModelType, '腾讯云引擎模型', 128), region: bounded(input.region, '腾讯云地域', 64), secretRef: TENCENT_SECRET_REF };
       const credentialValues = [input.secretId.trim(), input.secretKey.trim()];
@@ -187,7 +157,7 @@ export class CloudTranscriptionService {
       await this.configStore.save(config);
       return this.settings();
     } catch (error) {
-      if (config.providerId !== 'openai-compatible') this.secrets.delete(config.secretRef);
+      if (config.providerId === 'tencent-asr') this.secrets.delete(config.secretRef);
       throw error;
     }
   }
@@ -204,9 +174,7 @@ export class CloudTranscriptionService {
       resolveSecret: (reference) => Promise.resolve(this.secrets.get(reference)),
       ...(signal ? { signal } : {}),
     };
-    const provider = config.providerId === 'aliyun-tingwu'
-      ? new AliyunTingwuProvider({ fetch: this.fetchImplementation })
-      : new TencentCloudASRProvider({ fetch: this.fetchImplementation, readMedia: this.readMedia });
+    const provider = new TencentCloudASRProvider({ fetch: this.fetchImplementation, readMedia: this.readMedia });
     return {
       provider,
       config: { providerId: config.providerId, endpoint: target.href, model: config.model, secretRef: config.secretRef },

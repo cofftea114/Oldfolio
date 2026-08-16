@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe('cloud transcription device boundary', () => {
-  it('persists only the provider configuration and session secret reference', async () => {
+  it('persists only the Tencent provider configuration and session secret reference', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oldfolio-cloud-transcription-'));
     roots.push(root);
     const configPath = join(root, 'cloud-transcription.json');
@@ -31,23 +31,45 @@ describe('cloud transcription device boundary', () => {
     );
 
     const configured = await service.configure({
-      providerId: 'aliyun-tingwu', region: 'cn-beijing', sourceLanguage: 'auto',
-      accessKeyId: 'access-id', accessKeySecret: 'access-secret', appKey: 'app-key',
+      providerId: 'tencent-asr', region: 'ap-guangzhou', engineModelType: '16k_zh_en',
+      secretId: 'secret-id', secretKey: 'secret-key',
     });
 
     expect(configured).toMatchObject({
-      providerId: 'aliyun-tingwu', model: 'auto', credentialAvailable: true,
-      endpointHost: 'tingwu.cn-beijing.aliyuncs.com', inputMode: 'remote-url',
+      providerId: 'tencent-asr', model: '16k_zh_en', credentialAvailable: true,
+      endpointHost: 'asr.tencentcloudapi.com', inputMode: 'chunks',
     });
     const persisted = await readFile(configPath, 'utf8');
-    expect(persisted).toContain('session:aliyun-tingwu');
-    expect(persisted).not.toContain('access-id');
-    expect(persisted).not.toContain('access-secret');
-    expect(persisted).not.toContain('app-key');
+    expect(persisted).toContain('session:tencent-asr');
+    expect(persisted).not.toContain('secret-id');
+    expect(persisted).not.toContain('secret-key');
 
     await expect(service.configure({
-      providerId: 'aliyun-tingwu', region: 'cn-beijing', sourceLanguage: 'cn',
-      accessKeyId: '', accessKeySecret: '', appKey: '',
-    })).resolves.toMatchObject({ model: 'cn', credentialAvailable: true });
+      providerId: 'tencent-asr', region: 'ap-shanghai', engineModelType: '16k_zh',
+      secretId: '', secretKey: '',
+    })).resolves.toMatchObject({ model: '16k_zh', credentialAvailable: true });
+  });
+
+  it('migrates a removed Tingwu configuration to the default provider', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-cloud-transcription-legacy-'));
+    roots.push(root);
+    const configPath = join(root, 'cloud-transcription.json');
+    await writeFile(configPath, JSON.stringify({
+      version: 1,
+      providerId: 'aliyun-tingwu',
+      model: 'auto',
+      region: 'cn-beijing',
+      secretRef: 'session:aliyun-tingwu',
+    }));
+
+    const store = new CloudTranscriptionConfigStore(configPath);
+    await expect(store.load()).resolves.toEqual({
+      version: 1,
+      providerId: 'openai-compatible',
+      model: 'gpt-4o-mini-transcribe',
+      region: '',
+      secretRef: 'session:online-openai-compatible',
+    });
+    await expect(readFile(configPath, 'utf8')).resolves.not.toContain('aliyun-tingwu');
   });
 });

@@ -37,11 +37,11 @@ export interface OnlineMediaTranscriptionRequest {
   readonly sourceKind?: 'local-file' | 'remote-url';
   readonly sourceTitle: string;
   readonly importedFrom: string;
-  readonly providerId: 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr';
+  readonly providerId: 'openai-compatible' | 'tencent-asr';
   readonly endpointHost: string;
   readonly transcriptionModel: string;
   readonly secretRef: string;
-  readonly inputMode: 'chunks' | 'remote-url';
+  readonly inputMode: 'chunks';
   readonly language?: string;
   readonly chunkDurationMs: number;
 }

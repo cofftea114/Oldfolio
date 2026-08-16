@@ -3,9 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AIInvocationContext, AIProviderConfig } from '@oldfolio/domain';
 
 import {
-  AliyunTingwuProvider,
   TencentCloudASRProvider,
-  signAliyunRoaRequest,
   signTencentCloudRequest,
 } from './cloud-transcription.js';
 
@@ -28,17 +26,6 @@ describe('cloud transcription request signing', () => {
     expect(headers.get('X-TC-Region')).toBe('ap-guangzhou');
   });
 
-  it('creates deterministic Alibaba ROA v2 headers and canonical query order', () => {
-    const signed = signAliyunRoaRequest({
-      method: 'PUT', host: 'tingwu.cn-beijing.aliyuncs.com', path: '/openapi/tingwu/v2/tasks',
-      query: { type: 'offline' }, body: '{"AppKey":"app-key"}', accessKeyId: 'access-id',
-      accessKeySecret: 'access-secret', date: NOW, nonce: 'fixed-nonce',
-    });
-    expect(signed.url.href).toBe('https://tingwu.cn-beijing.aliyuncs.com/openapi/tingwu/v2/tasks?type=offline');
-    expect(signed.headers.get('Authorization')).toMatch(/^acs access-id:/u);
-    expect(signed.headers.get('Authorization')).not.toContain('access-secret');
-    expect(signed.headers.get('x-acs-signature-nonce')).toBe('fixed-nonce');
-  });
 });
 
 describe('cloud transcription providers', () => {
@@ -77,37 +64,4 @@ describe('cloud transcription providers', () => {
     expect(createBody).toMatchObject({ SourceType: 1, DataLen: 3, EngineModelType: '16k_zh_en' });
   });
 
-  it('polls Tingwu, downloads the trusted result, and combines words by sentence', async () => {
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ Code: '0', Data: { TaskId: 'task-1' } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ Code: '0', Data: { TaskStatus: 'ONGOING' } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        Code: '0', Data: { TaskStatus: 'COMPLETED', Result: { Transcription: 'https://result.oss-cn-beijing.aliyuncs.com/task.json?token=temporary' } },
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ Transcription: {
-        AudioInfo: { Language: 'cn', Duration: 2_000 },
-        Paragraphs: [{ SpeakerId: '1', Words: [
-          { SentenceId: 7, Start: 100, End: 300, Text: '你好' },
-          { SentenceId: 7, Start: 310, End: 700, Text: '世界' },
-        ] }],
-      } }), { status: 200 }));
-    const provider = new AliyunTingwuProvider({
-      fetch: fetchMock, now: () => NOW, nonce: () => 'fixed-nonce', sleep: () => Promise.resolve(), maxPolls: 3,
-    });
-    const config: AIProviderConfig = {
-      providerId: 'aliyun-tingwu', endpoint: 'https://tingwu.cn-beijing.aliyuncs.com/', model: 'auto', secretRef: 'session:aliyun',
-    };
-    const context: AIInvocationContext = {
-      resolveSecret: () => Promise.resolve(JSON.stringify({ accessKeyId: 'access-id', accessKeySecret: 'access-secret', appKey: 'app-key' })),
-    };
-    const result = await provider.transcribe(config, {
-      model: 'auto', mediaUri: 'https://media.example.test/video.mp4', durationMs: 2_000,
-    }, context);
-
-    expect(result).toMatchObject({ language: 'cn', text: '你好世界' });
-    expect(result.segments).toEqual([{ startMs: 100, endMs: 700, text: '你好世界', speaker: '1' }]);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    const createBody = JSON.parse(requestBody(fetchMock.mock.calls[0]?.[1]?.body)) as { Input: Record<string, unknown> };
-    expect(createBody.Input).toMatchObject({ FileUrl: 'https://media.example.test/video.mp4', SourceLanguage: 'auto' });
-  });
 });

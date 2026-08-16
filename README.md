@@ -98,10 +98,10 @@ it is never written to the Vault, SQLite index, device config, or logs.
    install `yt-dlp` yourself and select its executable in the same module. Oldfolio invokes it with
    browser cookies, playlists, and user config disabled, after an explicit authorization confirmation.
 2. Choose local Whisper to process a direct media URL or supported platform share link entirely with
-   the configured local model. Alternatively, choose OpenAI-compatible transcription, Alibaba Cloud Tingwu, or Tencent Cloud
+   the configured local model. Alternatively, choose OpenAI-compatible transcription or Tencent Cloud
    recording-file recognition. OpenAI-compatible transcription reuses the explicitly confirmed online
-   endpoint/key but has its own model selection. Tingwu accepts only a server-accessible public URL;
-   Tencent receives local 64-kbps AAC chunks kept below its raw-data request limit.
+   endpoint/key but has its own model selection. Tencent receives local 64-kbps AAC chunks kept below
+   its raw-data request limit.
 3. Paste a public direct HTTPS media URL or a YouTube, bilibili, or Douyin video share link under
    **Online video**. Authenticated/private content, browser Cookie extraction, playlists, private-network
    targets, and embedded URL credentials remain unsupported.

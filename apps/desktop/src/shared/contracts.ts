@@ -141,7 +141,7 @@ export interface OnlineAISettingsSummary {
 }
 
 export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
-export type CloudTranscriptionProviderId = 'openai-compatible' | 'aliyun-tingwu' | 'tencent-asr';
+export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
 
 export interface CloudTranscriptionSettingsSummary {
   version: 1;
@@ -152,7 +152,7 @@ export interface CloudTranscriptionSettingsSummary {
   configured: boolean;
   credentialAvailable: boolean;
   endpointHost: string;
-  inputMode: 'chunks' | 'remote-url';
+  inputMode: 'chunks';
 }
 
 export interface AIModelSummary {
@@ -261,7 +261,6 @@ export interface OldfolioDesktopApi {
   }): Promise<OnlineAISettingsSummary>;
   saveCloudTranscriptionSettings(input:
     | { providerId: 'openai-compatible'; model: string }
-    | { providerId: 'aliyun-tingwu'; region: string; sourceLanguage: string; accessKeyId: string; accessKeySecret: string; appKey: string }
     | { providerId: 'tencent-asr'; region: string; engineModelType: string; secretId: string; secretKey: string }
   ): Promise<CloudTranscriptionSettingsSummary>;
   prepareAISummary(path: string, executionTarget: AISummaryExecutionTarget): Promise<AISummaryPreparation>;
