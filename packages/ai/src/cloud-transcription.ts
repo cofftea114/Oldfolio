@@ -166,10 +166,12 @@ export function signTencentCloudRequest(input: {
   const secretService = hmacSha256(secretDate, service);
   const secretSigning = hmacSha256(secretService, 'tc3_request');
   const signature = createHmac('sha256', secretSigning).update(stringToSign).digest('hex');
+  // `host` remains part of the TC3 canonical signature, but Chromium must create
+  // the actual Host header from the request URL; Electron net.fetch rejects an
+  // explicitly supplied Host header with net::ERR_INVALID_ARGUMENT.
   const headers = new Headers({
     Authorization: `${algorithm} Credential=${input.secretId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
     'Content-Type': contentType,
-    Host: host,
     'X-TC-Action': input.action,
     'X-TC-Timestamp': String(input.timestamp),
     'X-TC-Version': TENCENT_VERSION,

@@ -71,6 +71,8 @@ describe('cloud transcription providers', () => {
       { startMs: 900, endMs: 1_500, text: '第二句。', speaker: 'speaker-2' },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    const requestHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(requestHeaders.has('Host')).toBe(false);
     const createBody = JSON.parse(requestBody(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(createBody).toMatchObject({ SourceType: 1, DataLen: 3, EngineModelType: '16k_zh_en' });
   });
