@@ -5,6 +5,8 @@ import { dirname } from 'node:path';
 import { OpenAICompatibleProvider, validateAIEndpoint } from '@oldfolio/ai';
 import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfolio/domain';
 
+import { normalizeAIContextWindow } from './ai-device-config.js';
+
 const ONLINE_SECRET_REF = 'session:online-openai-compatible';
 
 export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
@@ -31,6 +33,7 @@ export interface OnlineAIConfig {
   readonly confirmedHost: string;
   readonly chatModel: string;
   readonly transcriptionModel: string;
+  readonly contextWindow: number;
   readonly secretRef: typeof ONLINE_SECRET_REF;
 }
 
@@ -44,6 +47,7 @@ export interface ConfigureOnlineAIInput {
   readonly endpoint: string;
   readonly chatModel: string;
   readonly transcriptionModel?: string;
+  readonly contextWindow?: number;
   readonly apiKey: string;
   readonly hostConfirmed: boolean;
 }
@@ -68,6 +72,7 @@ const DEFAULT_CONFIG: OnlineAIConfig = {
   confirmedHost: 'api.openai.com',
   chatModel: '',
   transcriptionModel: '',
+  contextWindow: 128_000,
   secretRef: ONLINE_SECRET_REF,
 };
 
@@ -115,6 +120,7 @@ function parseConfig(source: string): OnlineAIConfig {
     confirmedHost: endpoint.hostname.toLowerCase(),
     chatModel: value.chatModel.trim(),
     transcriptionModel: value.transcriptionModel.trim(),
+    contextWindow: normalizeAIContextWindow(value.contextWindow, 128_000),
     secretRef: ONLINE_SECRET_REF,
   };
 }
@@ -181,7 +187,11 @@ export class OnlineAIService {
     };
   }
 
-  async probe(endpoint: string, apiKey: string, hostConfirmed: boolean): Promise<readonly { id: string; displayName: string }[]> {
+  async probe(endpoint: string, apiKey: string, hostConfirmed: boolean): Promise<readonly {
+    id: string;
+    displayName: string;
+    contextWindow?: number;
+  }[]> {
     const url = normalizeOnlineAIEndpoint(endpoint, hostConfirmed);
     const provider = this.provider(url, 'custom');
     this.secrets.set(ONLINE_SECRET_REF, apiKey);
@@ -189,7 +199,11 @@ export class OnlineAIService {
       const models = await provider.listModels({
         providerId: 'openai-compatible', endpoint: url.href, model: '', secretRef: ONLINE_SECRET_REF,
       }, this.context());
-      return models.map((model) => ({ id: model.id, displayName: model.displayName }));
+      return models.map((model) => ({
+        id: model.id,
+        displayName: model.displayName,
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+      }));
     } catch (error) {
       this.secrets.delete(ONLINE_SECRET_REF);
       throw error;
@@ -209,6 +223,7 @@ export class OnlineAIService {
       confirmedHost: endpoint.hostname.toLowerCase(),
       chatModel: boundedModel(input.chatModel, '在线总结模型'),
       transcriptionModel,
+      contextWindow: normalizeAIContextWindow(input.contextWindow, 128_000),
       secretRef: ONLINE_SECRET_REF,
     };
     try {
@@ -228,7 +243,8 @@ export class OnlineAIService {
     return {
       provider: this.provider(endpoint, config.preset),
       config: {
-        providerId: 'openai-compatible', endpoint: endpoint.href, model: config.chatModel, secretRef: config.secretRef,
+        providerId: 'openai-compatible', endpoint: endpoint.href, model: config.chatModel,
+        contextWindow: normalizeAIContextWindow(config.contextWindow, 128_000), secretRef: config.secretRef,
       },
       transcriptionModel: config.transcriptionModel,
       context: this.context(signal),
@@ -259,6 +275,11 @@ export class OnlineAIService {
       fetch: this.fetchImplementation,
       readMedia: this.readMedia,
       structuredOutputMode: preset === 'openai' || preset === 'grok' || preset === 'gemini' || preset === 'custom' ? 'json-schema' : 'json-object',
+      ...(preset === 'qwen'
+        ? { reasoningDialect: 'qwen' as const, defaultReasoningMode: 'disabled' as const }
+        : preset === 'deepseek'
+          ? { reasoningDialect: 'deepseek' as const, defaultReasoningMode: 'disabled' as const }
+          : {}),
     });
   }
 

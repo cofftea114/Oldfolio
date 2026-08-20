@@ -27,6 +27,7 @@ import type {
   AIPendingSummaryChange,
   AISettingsSummary,
   AISummaryExecutionTarget,
+  AISummaryMode,
   AISummaryPreparation,
   AISummaryTemplate,
   CloudTranscriptionProviderId,
@@ -134,6 +135,7 @@ export function App() {
   const [aiEndpoint, setAIEndpoint] = useState('http://127.0.0.1:11434/api/');
   const [aiModels, setAIModels] = useState<AIModelSummary[]>([]);
   const [aiModel, setAIModel] = useState('');
+  const [aiContextWindow, setAIContextWindow] = useState('8192');
   const [aiExecutionTarget, setAIExecutionTarget] = useState<AISummaryExecutionTarget>('local');
   const [transcriptionExecutionTarget, setTranscriptionExecutionTarget] = useState<AISummaryExecutionTarget>('local');
   const [onlineAISettings, setOnlineAISettings] = useState<OnlineAISettingsSummary | null>(null);
@@ -143,6 +145,7 @@ export function App() {
   const [onlineHostConfirmed, setOnlineHostConfirmed] = useState(false);
   const [onlineModels, setOnlineModels] = useState<AIModelSummary[]>([]);
   const [onlineChatModel, setOnlineChatModel] = useState('');
+  const [onlineContextWindow, setOnlineContextWindow] = useState('128000');
   const [onlineTranscriptionModel, setOnlineTranscriptionModel] = useState('gpt-4o-mini-transcribe');
   const [cloudTranscriptionSettings, setCloudTranscriptionSettings] = useState<CloudTranscriptionSettingsSummary | null>(null);
   const [cloudTranscriptionProvider, setCloudTranscriptionProvider] = useState<CloudTranscriptionProviderId>('openai-compatible');
@@ -156,6 +159,7 @@ export function App() {
   const [aiError, setAIError] = useState('');
   const [summaryPreparation, setSummaryPreparation] = useState<AISummaryPreparation | null>(null);
   const [summaryTemplate, setSummaryTemplate] = useState<AISummaryTemplate>('course');
+  const [summaryMode, setSummaryMode] = useState<AISummaryMode>('fast');
   const [pendingSummary, setPendingSummary] = useState<AIPendingSummaryChange | null>(null);
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
@@ -294,10 +298,12 @@ export function App() {
       setAIProvider(settings.providerId);
       setAIEndpoint(settings.endpoint);
       setAIModel(settings.model);
+      setAIContextWindow(String(settings.contextWindow));
       setOnlineAISettings(onlineSettings);
       setOnlineSummaryPreset(onlineSettings.preset);
       setOnlineAIEndpoint(onlineSettings.endpoint);
       setOnlineChatModel(onlineSettings.chatModel);
+      setOnlineContextWindow(String(onlineSettings.contextWindow));
       setOnlineTranscriptionModel(onlineSettings.transcriptionModel || 'gpt-4o-mini-transcribe');
       setCloudTranscriptionSettings(cloudSettings);
       setCloudTranscriptionProvider(cloudSettings.providerId);
@@ -320,7 +326,11 @@ export function App() {
     try {
       const models = await window.oldfolio.probeLocalAI({ providerId: aiProvider, endpoint: aiEndpoint });
       setAIModels(models);
-      setAIModel((current) => models.some((model) => model.id === current) ? current : models[0]?.id ?? '');
+      setAIModel((current) => {
+        const selected = models.find((model) => model.id === current) ?? models[0];
+        if (selected?.contextWindow) setAIContextWindow(String(selected.contextWindow));
+        return selected?.id ?? '';
+      });
       setStatus(models.length ? `已发现 ${models.length} 个本地模型` : `${LOCAL_AI_PROVIDER_LABELS[aiProvider]} 可连接，但没有可用模型`);
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : `无法连接 ${LOCAL_AI_PROVIDER_LABELS[aiProvider]}`);
@@ -335,7 +345,12 @@ export function App() {
     setAIBusy(true);
     setAIError('');
     try {
-      const settings = await window.oldfolio.saveAISettings({ providerId: aiProvider, endpoint: aiEndpoint, model: aiModel });
+      const settings = await window.oldfolio.saveAISettings({
+        providerId: aiProvider,
+        endpoint: aiEndpoint,
+        model: aiModel,
+        contextWindow: Number(aiContextWindow),
+      });
       setAISettings(settings);
       setAIEndpoint(settings.endpoint);
       setStatus('本地 AI 配置已保存到当前设备');
@@ -359,7 +374,11 @@ export function App() {
         hostConfirmed: onlineHostConfirmed,
       });
       setOnlineModels(models);
-      setOnlineChatModel((current) => models.some((model) => model.id === current) ? current : models[0]?.id ?? '');
+      setOnlineChatModel((current) => {
+        const selected = models.find((model) => model.id === current) ?? models[0];
+        if (selected?.contextWindow) setOnlineContextWindow(String(selected.contextWindow));
+        return selected?.id ?? '';
+      });
       setStatus(models.length ? `已发现 ${models.length} 个在线模型` : '在线服务可连接，但没有返回模型');
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法连接在线 AI 服务');
@@ -378,6 +397,7 @@ export function App() {
         preset: onlineSummaryPreset,
         endpoint: onlineAIEndpoint,
         chatModel: onlineChatModel,
+        contextWindow: Number(onlineContextWindow),
         apiKey: onlineAPIKey,
         hostConfirmed: onlineHostConfirmed,
       });
@@ -429,7 +449,7 @@ export function App() {
     setAppliedChange(null);
     setStatus('正在准备摘要数据披露…');
     try {
-      const preparation = await window.oldfolio.prepareAISummary(active.path, aiExecutionTarget);
+      const preparation = await window.oldfolio.prepareAISummary(active.path, aiExecutionTarget, summaryMode);
       setSummaryPreparation(preparation);
       setSummaryTemplate(preparation.suggestedTemplate);
       setStatus('请确认发送内容和摘要模板');
@@ -454,6 +474,7 @@ export function App() {
         sourceRevision: summaryPreparation.sourceRevision,
         template: summaryTemplate,
         executionTarget: summaryPreparation.executionTarget,
+        mode: summaryPreparation.mode,
       });
       setPendingSummary(pending);
       setStatus('AI 摘要变更集已生成，等待批准');
@@ -1069,13 +1090,21 @@ export function App() {
                   {aiBusy ? '检测中…' : '检测本机模型'}
                 </button>
                 <label className="field-label">摘要模型
-                  <select disabled={aiBusy || aiModels.length === 0} value={aiModel} onChange={(event) => setAIModel(event.target.value)}>
+                  <select disabled={aiBusy || aiModels.length === 0} value={aiModel} onChange={(event) => {
+                    const model = aiModels.find((candidate) => candidate.id === event.target.value);
+                    setAIModel(event.target.value);
+                    if (model?.contextWindow) setAIContextWindow(String(model.contextWindow));
+                  }}>
                     {!aiModel && <option value="">尚未检测模型</option>}
                     {aiModel && !aiModels.some((model) => model.id === aiModel) && <option value={aiModel}>{aiModel}（已保存）</option>}
                     {aiModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
                   </select>
                 </label>
-                <button className="transcribe-button" disabled={aiBusy || !aiModel} onClick={() => void saveAISettings()}>
+                <label className="field-label">上下文窗口（Token）
+                  <input disabled={aiBusy || !vault} min="8192" max="10000000" step="1024" type="number" value={aiContextWindow} onChange={(event) => setAIContextWindow(event.target.value)} />
+                </label>
+                <small className="model-help-note">按当前加载模型的实际上下文填写；LM Studio 能返回该值时会自动带入。</small>
+                <button className="transcribe-button" disabled={aiBusy || !aiModel || !Number.isSafeInteger(Number(aiContextWindow))} onClick={() => void saveAISettings()}>
                   保存当前设备配置
                 </button>
                 <small className="model-help-note">这里只保存服务类型、endpoint 和模型名，不保存任何 API Key，也不会写入 Vault。</small>
@@ -1096,6 +1125,7 @@ export function App() {
                     if (preset !== 'custom') {
                       setOnlineAIEndpoint(defaults.endpoint);
                       setOnlineChatModel(defaults.model);
+                      setOnlineContextWindow('128000');
                     }
                     setOnlineHostConfirmed(false);
                     setOnlineModels([]);
@@ -1138,7 +1168,11 @@ export function App() {
                   <input disabled={aiBusy || !vault} list="online-summary-models" value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)} placeholder="输入或选择模型 ID" />
                   <datalist id="online-summary-models">{onlineModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</datalist>
                 </label>
-                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim()} onClick={() => void saveOnlineAISettings()}>
+                <label className="field-label">上下文窗口（Token）
+                  <input disabled={aiBusy || !vault} min="8192" max="10000000" step="1024" type="number" value={onlineContextWindow} onChange={(event) => setOnlineContextWindow(event.target.value)} />
+                </label>
+                <small className="model-help-note">请按所选模型的实际规格填写，例如一百万上下文填写 1000000；摘要会据此决定全文直传或动态分窗。</small>
+                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim() || !Number.isSafeInteger(Number(onlineContextWindow))} onClick={() => void saveOnlineAISettings()}>
                   保存配置并保留本次会话 Key
                 </button>
                 <small className="model-help-note">endpoint、模型名和密钥引用保存在当前设备；API Key 只在主进程内存中保留，退出 Oldfolio 后清除，不写入 Vault、索引或日志。</small>
@@ -1286,11 +1320,22 @@ export function App() {
               <>
                 <p>从 Transcript 归纳视频的核心观点和论证结构。AI 只创建待审阅变更集，不会静默覆盖笔记。</p>
                 <label className="field-label">摘要运行位置
-                  <select disabled={aiBusy} value={aiExecutionTarget} onChange={(event) => setAIExecutionTarget(event.target.value as AISummaryExecutionTarget)}>
+                  <select disabled={aiBusy} value={aiExecutionTarget} onChange={(event) => {
+                    const target = event.target.value as AISummaryExecutionTarget;
+                    setAIExecutionTarget(target);
+                    setSummaryMode(target === 'online' ? 'deep' : 'fast');
+                  }}>
                     <option value="local">本机模型</option>
                     <option value="online">在线 OpenAI-compatible</option>
                   </select>
                 </label>
+                <label className="field-label">摘要模式
+                  <select disabled={aiBusy} value={summaryMode} onChange={(event) => setSummaryMode(event.target.value as AISummaryMode)}>
+                    <option value="fast">快速摘要 · 关闭思考 · 1 次调用</option>
+                    <option disabled={aiExecutionTarget !== 'online'} value="deep">深度摘要 · 思考分析后整理 · 2 次调用</option>
+                  </select>
+                </label>
+                <small className="ai-hint">深度摘要第一阶段使用自然语言理解全文，第二阶段关闭思考并生成笔记结构；会增加一次模型调用和相应费用。</small>
                 <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
                   {aiBusy ? '准备中…' : '准备摘要'}
                 </button>
@@ -1305,12 +1350,19 @@ export function App() {
                     ? `在线 ${endpointHost(summaryPreparation.endpoint)}`
                     : `本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]}`}</dd></div>
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
+                  <div><dt>模式</dt><dd>{summaryPreparation.mode === 'deep' ? '深度摘要（两阶段）' : '快速摘要'}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
+                  <div><dt>上下文</dt><dd>{summaryPreparation.contextWindow.toLocaleString()} tokens</dd></div>
+                  <div><dt>输出预留</dt><dd>{summaryPreparation.mode === 'deep'
+                    ? `分析 ${summaryPreparation.analysisOutputTokens.toLocaleString()} + 整理 ${summaryPreparation.reservedOutputTokens.toLocaleString()} tokens`
+                    : `${summaryPreparation.reservedOutputTokens.toLocaleString()} tokens`}</dd></div>
                   <div><dt>工作文件</dt><dd>{summaryPreparation.workingDocumentPath}</dd></div>
                   <div><dt>处理方式</dt><dd>{summaryPreparation.processingMode === 'document-reader'
-                    ? `文档读取器（预计 ${summaryPreparation.estimatedModelCalls} 次模型调用）`
-                    : '单次摘要'}</dd></div>
+                    ? `动态分窗（每窗最多约 ${summaryPreparation.windowTokenBudget.toLocaleString()} tokens，预计 ${summaryPreparation.estimatedModelCalls} 次调用）`
+                    : summaryPreparation.mode === 'deep'
+                      ? `全文两阶段（预计 ${summaryPreparation.estimatedModelCalls} 次调用，输入预算 ${summaryPreparation.inputTokenBudget.toLocaleString()} tokens）`
+                      : `全文单次摘要（输入预算 ${summaryPreparation.inputTokenBudget.toLocaleString()} tokens）`}</dd></div>
                   <div><dt>预计费用</dt><dd>{summaryPreparation.estimatedCost === 0 ? '¥0（本地）' : '由在线服务商计费'}</dd></div>
                 </dl>
                 {summaryPreparation.executionTarget === 'online' && (

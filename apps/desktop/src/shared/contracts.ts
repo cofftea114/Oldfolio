@@ -124,10 +124,12 @@ export interface AISettingsSummary {
   providerId: AILocalProviderId;
   endpoint: string;
   model: string;
+  contextWindow: number;
   configured: boolean;
 }
 
 export type AISummaryExecutionTarget = 'local' | 'online';
+export type AISummaryMode = 'fast' | 'deep';
 
 export interface OnlineAISettingsSummary {
   version: 1;
@@ -136,6 +138,7 @@ export interface OnlineAISettingsSummary {
   confirmedHost: string;
   chatModel: string;
   transcriptionModel: string;
+  contextWindow: number;
   secretRef: string;
   configured: boolean;
   keyAvailable: boolean;
@@ -177,6 +180,7 @@ export interface CloudTranscriptionSettingsSummary {
 export interface AIModelSummary {
   id: string;
   displayName: string;
+  contextWindow?: number;
 }
 
 export interface AISummaryPreparation {
@@ -188,6 +192,12 @@ export interface AISummaryPreparation {
   segmentCount: number;
   sourceCharacters: number;
   estimatedInputTokens: number;
+  mode: AISummaryMode;
+  contextWindow: number;
+  reservedOutputTokens: number;
+  analysisOutputTokens: number;
+  inputTokenBudget: number;
+  windowTokenBudget: number;
   workingDocumentPath: string;
   processingMode: 'direct' | 'document-reader';
   estimatedModelCalls: number;
@@ -270,12 +280,14 @@ export interface OldfolioDesktopApi {
     providerId: AILocalProviderId;
     endpoint: string;
     model: string;
+    contextWindow: number;
   }): Promise<AISettingsSummary>;
   saveOnlineAISettings(input: {
     preset?: OnlineSummaryPreset;
     endpoint: string;
     chatModel: string;
     transcriptionModel?: string;
+    contextWindow: number;
     apiKey: string;
     hostConfirmed: boolean;
   }): Promise<OnlineAISettingsSummary>;
@@ -283,12 +295,17 @@ export interface OldfolioDesktopApi {
     | { providerId: 'openai-compatible'; model: string }
     | { providerId: 'tencent-asr'; region: string; engineModelType: TencentASREngineModel; secretId: string; secretKey: string }
   ): Promise<CloudTranscriptionSettingsSummary>;
-  prepareAISummary(path: string, executionTarget: AISummaryExecutionTarget): Promise<AISummaryPreparation>;
+  prepareAISummary(
+    path: string,
+    executionTarget: AISummaryExecutionTarget,
+    mode: AISummaryMode,
+  ): Promise<AISummaryPreparation>;
   generateAISummary(input: {
     path: string;
     sourceRevision: string;
     template: AISummaryTemplate;
     executionTarget: AISummaryExecutionTarget;
+    mode: AISummaryMode;
   }): Promise<AIPendingSummaryChange>;
   applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
   undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;

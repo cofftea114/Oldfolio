@@ -14,6 +14,8 @@ export interface AIProviderConfig {
   readonly providerId: string;
   readonly endpoint: string;
   readonly model: string;
+  /** Effective input + output context window selected for this model. */
+  readonly contextWindow?: number;
   /** Reference to an OS keychain entry, never the secret itself. */
   readonly secretRef?: string;
 }
@@ -35,6 +37,7 @@ export interface AICompletionRequest {
   readonly messages: readonly AIMessage[];
   readonly temperature?: number;
   readonly maxOutputTokens?: number;
+  readonly reasoningMode?: 'provider-default' | 'disabled' | 'enabled';
   readonly responseFormat?: 'text' | 'json';
   readonly responseSchema?: JsonSchema;
 }

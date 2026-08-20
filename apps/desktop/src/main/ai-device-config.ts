@@ -11,14 +11,26 @@ export interface AIDeviceConfig {
   readonly providerId: LocalAIProviderId;
   readonly endpoint: string;
   readonly model: string;
+  readonly contextWindow?: number;
 }
+
+export const DEFAULT_LOCAL_AI_CONTEXT_WINDOW = 8_192;
 
 const DEFAULT_CONFIG: AIDeviceConfig = {
   version: 1,
   providerId: 'ollama',
   endpoint: 'http://127.0.0.1:11434/api/',
   model: '',
+  contextWindow: DEFAULT_LOCAL_AI_CONTEXT_WINDOW,
 };
+
+export function normalizeAIContextWindow(value: unknown, fallback: number): number {
+  const contextWindow = value === undefined ? fallback : value;
+  if (!Number.isSafeInteger(contextWindow) || (contextWindow as number) < 8_192 || (contextWindow as number) > 10_000_000) {
+    throw new Error('模型上下文窗口必须是 8,192 到 10,000,000 之间的整数 Token 数。');
+  }
+  return contextWindow as number;
+}
 
 function isLoopback(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
@@ -60,6 +72,7 @@ function parseConfig(source: string): AIDeviceConfig {
     providerId: value.providerId,
     endpoint: normalizeLocalAIEndpoint(value.providerId, value.endpoint),
     model: value.model.trim(),
+    contextWindow: normalizeAIContextWindow(value.contextWindow, DEFAULT_LOCAL_AI_CONTEXT_WINDOW),
   };
 }
 

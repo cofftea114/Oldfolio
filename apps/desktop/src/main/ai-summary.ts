@@ -9,8 +9,8 @@ import {
   generateTranscriptSummary,
   prepareTranscriptSummary,
   type PreparedTranscriptSummary,
-  type SummaryEvidence,
   type SummaryTemplate,
+  type TranscriptSummaryMode,
 } from '@oldfolio/ai';
 import type {
   AIInvocationContext,
@@ -30,7 +30,7 @@ import {
   type VaultRepository,
 } from '@oldfolio/vault';
 
-import { normalizeLocalAIEndpoint } from './ai-device-config.js';
+import { DEFAULT_LOCAL_AI_CONTEXT_WINDOW, normalizeAIContextWindow, normalizeLocalAIEndpoint } from './ai-device-config.js';
 import type { AIDeviceConfigStore, LocalAIProviderId } from './ai-device-config.js';
 import type { OnlineAIService } from './online-ai.js';
 
@@ -45,6 +45,12 @@ export interface AISummaryPreparation {
   readonly segmentCount: number;
   readonly sourceCharacters: number;
   readonly estimatedInputTokens: number;
+  readonly mode: TranscriptSummaryMode;
+  readonly contextWindow: number;
+  readonly reservedOutputTokens: number;
+  readonly analysisOutputTokens: number;
+  readonly inputTokenBudget: number;
+  readonly windowTokenBudget: number;
   readonly workingDocumentPath: string;
   readonly processingMode: 'direct' | 'document-reader';
   readonly estimatedModelCalls: number;
@@ -113,16 +119,6 @@ function revision(snapshot: VaultFileSnapshot): DocumentRevision {
   };
 }
 
-function displayTime(milliseconds: number): string {
-  const seconds = Math.floor(milliseconds / 1_000);
-  const hours = Math.floor(seconds / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
-  const remainder = seconds % 60;
-  return hours > 0
-    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
-    : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
-}
-
 function markdownText(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -135,11 +131,6 @@ function markdownText(value: string): string {
     .trim();
 }
 
-function citationLink(resource: string, evidence: SummaryEvidence): string {
-  const separator = resource.includes('#') ? '&' : '#';
-  return `[定位 ${displayTime(evidence.startMs)}](${resource}${separator}t=${(evidence.startMs / 1_000).toFixed(3)})`;
-}
-
 function summaryPath(sourcePath: string): string {
   const stem = parse(sourcePath).name.normalize('NFC').replaceAll(/[^a-zA-Z0-9._-]/gu, '-').replaceAll(/-+/gu, '-').slice(0, 52) || 'transcript';
   return `bundles/personal/wiki/summaries/${stem}-${sha256(sourcePath).slice(0, 16)}.md`;
@@ -149,16 +140,6 @@ function replacementDiff(path: string, previous: string | null, content: string)
   const removed = previous === null ? [] : previous.split('\n').map((line) => `-${line}`);
   const added = content.split('\n').map((line) => `+${line}`);
   return [`--- ${previous === null ? '/dev/null' : path}`, `+++ ${path}`, ...removed, ...added].join('\n');
-}
-
-function collectEvidenceIds(summary: {
-  readonly overview: { readonly evidenceIds: readonly string[] };
-  readonly sections: readonly { readonly evidenceIds: readonly string[] }[];
-}): string[] {
-  return [...new Set([
-    ...summary.overview.evidenceIds,
-    ...summary.sections.flatMap((item) => item.evidenceIds),
-  ])];
 }
 
 export class AISummaryService {
@@ -173,37 +154,54 @@ export class AISummaryService {
     private readonly onlineAI?: OnlineAIService,
   ) {}
 
-  async settings(): Promise<{ readonly providerId: LocalAIProviderId; readonly endpoint: string; readonly model: string; readonly configured: boolean }> {
+  async settings(): Promise<{ readonly providerId: LocalAIProviderId; readonly endpoint: string; readonly model: string; readonly contextWindow: number; readonly configured: boolean }> {
     const config = await this.configStore.load();
-    return { ...config, configured: Boolean(config.model) };
+    return {
+      ...config,
+      contextWindow: normalizeAIContextWindow(config.contextWindow, DEFAULT_LOCAL_AI_CONTEXT_WINDOW),
+      configured: Boolean(config.model),
+    };
   }
 
   async probe(
     providerId: LocalAIProviderId,
     endpoint: string,
-  ): Promise<readonly { readonly id: string; readonly displayName: string }[]> {
+  ): Promise<readonly { readonly id: string; readonly displayName: string; readonly contextWindow?: number }[]> {
     const normalized = normalizeLocalAIEndpoint(providerId, endpoint);
     const models = await this.provider(providerId).listModels({ providerId, endpoint: normalized, model: '' });
-    return models.map((model) => ({ id: model.id, displayName: model.displayName }));
+    return models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+    }));
   }
 
   async configure(
     providerId: LocalAIProviderId,
     endpoint: string,
     model: string,
+    contextWindow: number = DEFAULT_LOCAL_AI_CONTEXT_WINDOW,
   ): Promise<ReturnType<AISummaryService['settings']> extends Promise<infer T> ? T : never> {
     const normalized = normalizeLocalAIEndpoint(providerId, endpoint);
     if (!model.trim()) throw new Error('请选择一个本地聊天模型。');
     const models = await this.provider(providerId).listModels({ providerId, endpoint: normalized, model: '' });
     if (!models.some((candidate) => candidate.id === model.trim())) throw new Error('所选模型不在本地服务返回的模型列表中。');
-    await this.configStore.save({ version: 1, providerId, endpoint: normalized, model: model.trim() });
+    await this.configStore.save({
+      version: 1, providerId, endpoint: normalized, model: model.trim(),
+      contextWindow: normalizeAIContextWindow(contextWindow, DEFAULT_LOCAL_AI_CONTEXT_WINDOW),
+    });
     return this.settings();
   }
 
-  async prepare(sourcePath: string, executionTarget: AISummaryExecutionTarget = 'local'): Promise<AISummaryPreparation> {
+  async prepare(
+    sourcePath: string,
+    executionTarget: AISummaryExecutionTarget = 'local',
+    mode: TranscriptSummaryMode = 'fast',
+  ): Promise<AISummaryPreparation> {
+    if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget);
     const { config } = execution;
-    const prepared = await this.readPrepared(sourcePath);
+    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode);
     return {
       sourcePath: prepared.sourcePath,
       sourceRevision: prepared.sourceRevision,
@@ -213,6 +211,12 @@ export class AISummaryService {
       segmentCount: prepared.evidence.length,
       sourceCharacters: prepared.sourceCharacters,
       estimatedInputTokens: prepared.estimatedInputTokens,
+      mode: prepared.mode,
+      contextWindow: prepared.contextWindow,
+      reservedOutputTokens: prepared.reservedOutputTokens,
+      analysisOutputTokens: prepared.analysisOutputTokens,
+      inputTokenBudget: prepared.inputTokenBudget,
+      windowTokenBudget: prepared.windowTokenBudget,
       workingDocumentPath: prepared.workingDocumentPath,
       processingMode: prepared.processingMode,
       estimatedModelCalls: prepared.estimatedModelCalls,
@@ -232,11 +236,13 @@ export class AISummaryService {
     template: SummaryTemplate,
     signal?: AbortSignal,
     executionTarget: AISummaryExecutionTarget = 'local',
+    mode: TranscriptSummaryMode = 'fast',
   ): Promise<AIPendingSummaryChange> {
     if (!(SUMMARY_TEMPLATES as readonly string[]).includes(template)) throw new Error('摘要模板无效。');
+    if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget, signal);
     const { config } = execution;
-    const prepared = await this.readPrepared(sourcePath);
+    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
     await this.ensureWorkingDocument(prepared);
     const generated = await generateTranscriptSummary(
@@ -248,52 +254,22 @@ export class AISummaryService {
     );
     const targetPath = summaryPath(sourcePath);
     const existing = await this.readOptional(targetPath);
-    const evidenceById = new Map(prepared.evidence.map((item) => [item.id, item]));
-    const links = (ids: readonly string[]) => ids.map((id) => {
-      const evidence = evidenceById.get(id);
-      if (!evidence) throw new Error(`摘要引用了未知证据 ${id}。`);
-      return citationLink(prepared.resource, evidence);
-    }).join(' ');
     const logicalId = `synthesis-${sha256(sourcePath).slice(0, 24)}`;
     const body = [
       `# ${markdownText(generated.summary.title)}`,
       '',
       `> 来源：[[${sourcePath}|原始转录]]`,
       `> 摘要方式：${summaryTemplateLabels[generated.template]}`,
-      '> 提示：本笔记根据自动转录生成；原转录可能存在识别错误，请通过“定位”链接返回视频核对。',
+      `> 生成模式：${generated.mode === 'deep' ? '深度摘要（思考分析 + 编辑润色）' : '快速摘要'}`,
+      '> 提示：本笔记根据自动转录生成；原转录可能存在识别错误，可打开上方原始转录核对。',
       '',
-      '## 内容概览',
-      '',
-      `${markdownText(generated.summary.overview.text)} ${links(generated.summary.overview.evidenceIds)}`,
-      '',
-      '## 主题笔记',
-      '',
-      ...generated.summary.sections.flatMap((section) => [
-        `### ${markdownText(section.heading)}`,
-        '',
-        `${markdownText(section.summary)} ${links(section.evidenceIds)}`,
-        '',
-        ...section.points.map((point) => `- ${markdownText(point)}`),
-        '',
-      ]),
-      '## 总结与启发',
-      '',
-      ...generated.summary.takeaways.map((takeaway) => `- ${markdownText(takeaway)}`),
-      ...(generated.summary.uncertainties.length === 0
-        ? []
-        : [
-            '',
-            '## 转录存疑',
-            '',
-            '> [!warning] 需要回看原视频确认',
-            ...generated.summary.uncertainties.map((uncertainty) => `> - ${markdownText(uncertainty)}`),
-          ]),
+      generated.summary.markdown,
     ].join('\n');
     const content = serializeNewOkfConcept({
       frontmatter: {
         type: 'Synthesis',
         title: generated.summary.title,
-        description: `AI-maintained ${generated.template} summary with timestamped transcript evidence.`,
+        description: `AI-maintained readable ${generated.template} summary.`,
         sources: [{ resource: sourcePath, id: `transcript-${sha256(sourcePath).slice(0, 24)}`, title: prepared.title }],
         status: 'draft',
         generated: { by: `${config.providerId}:${generated.completion.model}`, at: this.now().toISOString() },
@@ -302,24 +278,14 @@ export class AISummaryService {
           source_path: sourcePath,
           source_revision: sourceRevision,
           summary_template: generated.template,
+          summary_mode: generated.mode,
           prompt_version: generated.promptVersion,
         },
       },
       body,
     });
-    const citationIds = collectEvidenceIds(generated.summary);
-    const citations: WikiCitation[] = citationIds.map((id) => {
-      const evidence = evidenceById.get(id);
-      if (!evidence) throw new Error(`摘要引用了未知证据 ${id}。`);
-      return {
-        id,
-        sourceId: sourcePath,
-        resource: prepared.resource,
-        excerpt: evidence.text,
-        startMs: evidence.startMs,
-        ...(evidence.endMs === undefined ? {} : { endMs: evidence.endMs }),
-      };
-    });
+    const citationIds: string[] = [];
+    const citations: WikiCitation[] = [];
     const source = await this.repository.read(sourcePath);
     const baseRevisions = [revision(source), ...(existing ? [revision(existing)] : [])];
     const operation = existing
@@ -377,7 +343,11 @@ export class AISummaryService {
     return { ...undone, ...(sourcePath ? { sourcePath } : {}) };
   }
 
-  private async readPrepared(sourcePath: string): Promise<PreparedTranscriptSummary> {
+  private async readPrepared(
+    sourcePath: string,
+    contextWindow?: number,
+    mode: TranscriptSummaryMode = 'fast',
+  ): Promise<PreparedTranscriptSummary> {
     const snapshot = await this.repository.read(sourcePath);
     const manifest = parseTranscriptPlaybackManifest(snapshot.text, snapshot.path);
     if (!manifest) throw new Error('当前文档不是带时间戳的 Oldfolio Transcript。');
@@ -387,6 +357,8 @@ export class AISummaryService {
       title: manifest.title,
       resource: manifest.resource,
       segments: manifest.segments,
+      mode,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
     });
   }
 

@@ -2,18 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
   EndpointPolicyError,
+  AIProviderError,
   LMStudioProvider,
   OpenAICompatibleProvider,
   assertChangeSetRevisions,
   classifySummaryTemplate,
   createPromptDataBoundary,
   createWikiChangeSet,
+  estimateTextTokens,
   parseStructuredOutput,
   generateTranscriptSummary,
   prepareTranscriptSummary,
   validateAIEndpoint,
 } from './index.js';
-import type { AIProvider } from '@oldfolio/domain';
+import type { AICompletionRequest, AIProvider } from '@oldfolio/domain';
 
 describe('AI security boundaries', () => {
   it('never serializes an invocation secret or retains it on the provider', async () => {
@@ -222,10 +224,44 @@ describe('AI security boundaries', () => {
       endpointPolicy: { confirmedHosts: ['models.example.test'] }, fetch: fetchMock,
     });
 
-    await expect(provider.complete({
+    const completion = provider.complete({
       providerId: 'openai-compatible', endpoint: 'https://models.example.test/v1/', model: 'qwen',
-    }, { model: 'qwen', messages: [{ role: 'user', content: 'summary' }], maxOutputTokens: 1_536 }))
-      .rejects.toThrow(/output limit.*reasoning/iu);
+    }, { model: 'qwen', messages: [{ role: 'user', content: 'summary' }], maxOutputTokens: 1_536 });
+    try {
+      await completion;
+      throw new Error('Expected reasoning-only completion to fail.');
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(AIProviderError);
+      if (!(error instanceof AIProviderError)) throw error;
+      expect(error.code).toBe('REASONING_OUTPUT_EXHAUSTED');
+      expect(error.message).toMatch(/思考.*最终摘要/u);
+    }
+  });
+
+  it('disables thinking for structured output when the provider preset requests it', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      model: 'qwen-plus',
+      choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['dashscope.example.test'] },
+      fetch: fetchMock,
+      reasoningDialect: 'qwen',
+      defaultReasoningMode: 'disabled',
+      structuredOutputMode: 'json-object',
+    });
+    await provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://dashscope.example.test/v1/', model: 'qwen-plus',
+    }, {
+      model: 'qwen-plus',
+      messages: [{ role: 'user', content: 'summary' }],
+      maxOutputTokens: 8_192,
+      responseFormat: 'json',
+    });
+    const requestBody = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof requestBody !== 'string') throw new Error('Expected a JSON request body.');
+    const body = JSON.parse(requestBody) as Record<string, unknown>;
+    expect(body).toMatchObject({ enable_thinking: false, max_tokens: 8_192 });
   });
 
   it('rejects insecure and unconfirmed custom HTTP endpoints', () => {
@@ -315,7 +351,7 @@ describe('AI security boundaries', () => {
     ).rejects.toThrow(/L3 or higher/);
   });
 
-  it('generates a template-aware transcript summary whose claims cite known evidence', async () => {
+  it('generates a readable template-aware Markdown transcript summary', async () => {
     const prepared = prepareTranscriptSummary({
       sourcePath: 'bundles/personal/wiki/transcripts/lesson.md',
       sourceRevision: 'revision-1',
@@ -342,18 +378,7 @@ describe('AI security boundaries', () => {
           '安装教程：三个步骤',
         );
         return Promise.resolve({
-          content: JSON.stringify({
-            title: '安装步骤摘要',
-            overview: { text: '先备份，再安装并验证。', evidenceIds: ['segment-00001', 'segment-00002'] },
-            sections: [{
-              heading: '安装与验证',
-              summary: '安装流程从备份开始，并以版本验证结束。',
-              points: ['安装前备份配置。', '安装后检查版本。'],
-              evidenceIds: ['segment-00001'],
-            }],
-            takeaways: ['先保护现有配置，再执行安装并确认结果。'],
-            uncertainties: [],
-          }),
+          content: '# 安装步骤摘要\n\n## 安装与验证\n\n安装前先备份配置，安装后检查版本。\n\n- 先保护现有配置\n- 再执行安装并确认结果',
           model: 'test-model',
           finishReason: 'stop',
         });
@@ -363,10 +388,13 @@ describe('AI security boundaries', () => {
       providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
     }, prepared);
     expect(generated.template).toBe('tutorial');
-    expect(generated.summary.sections[0]?.evidenceIds).toEqual(['segment-00001']);
+    expect(generated.summary).toEqual({
+      title: '安装步骤摘要',
+      markdown: '## 安装与验证\n\n安装前先备份配置，安装后检查版本。\n\n- 先保护现有配置\n- 再执行安装并确认结果',
+    });
   });
 
-  it('rejects summary claims that cite evidence the transcript did not provide', async () => {
+  it('does not require evidence ids, timestamps, or a fixed JSON shape', async () => {
     const prepared = prepareTranscriptSummary({
       sourcePath: 'bundles/personal/wiki/transcripts/lesson.md',
       sourceRevision: 'revision-1',
@@ -377,19 +405,14 @@ describe('AI security boundaries', () => {
     const provider: AIProvider = {
       id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
       complete: () => Promise.resolve({
-        content: JSON.stringify({
-          title: 'Invalid',
-          overview: { text: 'Unsupported.', evidenceIds: ['segment-99999'] },
-          sections: [{ heading: 'Evidence', summary: 'Evidence.', points: ['Evidence.'], evidenceIds: ['segment-00001'] }],
-          takeaways: ['Evidence.'],
-          uncertainties: [],
-        }),
+        content: '# Useful summary\n\nThe speaker explains the supported claim in plain prose.',
         model: 'test-model', finishReason: 'stop',
       }),
     };
-    await expect(generateTranscriptSummary(provider, {
+    const generated = await generateTranscriptSummary(provider, {
       providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
-    }, prepared)).rejects.toThrow(/unknown transcript evidence/);
+    }, prepared);
+    expect(generated.summary.markdown).toContain('plain prose');
   });
 
   it('summarizes transcripts larger than a local model context window in bounded evidence-preserving calls', async () => {
@@ -408,47 +431,23 @@ describe('AI security boundaries', () => {
     const provider: AIProvider = {
       id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
       complete: (_config, request) => {
-        const promptCharacters = request.messages.reduce((total, message) => total + message.content.length, 0);
-        calls.push(promptCharacters);
+        const requestTokens = estimateTextTokens([
+          ...request.messages.map((message) => message.content),
+          JSON.stringify(request.responseSchema ?? {}),
+        ].join('\n')) + (request.maxOutputTokens ?? 0);
+        calls.push(requestTokens);
         prompts.push(request.messages.map((message) => message.content).join('\n'));
-        if (promptCharacters > 8_000) throw new Error(`context limit exceeded: ${promptCharacters}`);
-        const evidenceIds = [...new Set(request.messages
-          .flatMap((message) => message.content.match(/segment-\d{5}/gu) ?? []))];
-        const firstEvidenceId = evidenceIds[0];
-        if (!firstEvidenceId) throw new Error('The request did not contain source evidence.');
-        const properties = (request.responseSchema as { readonly properties?: Record<string, unknown> } | undefined)?.properties;
-        if (properties && 'notes' in properties) {
-          expect(properties.notes).toMatchObject({ maxLength: 1_400 });
-          const evidenceIdSchema = properties.evidenceIds as {
-            readonly items?: { readonly enum?: readonly string[] };
-          } | undefined;
-          const schemaEvidenceIds = evidenceIdSchema?.items?.enum;
-          const sourceRecordId = request.messages
-            .flatMap((message) => message.content.match(/\.oldfolio\/cache\/ai-inputs\/[^"\\]+#window-\d+/gu) ?? [])[0];
-          const returnedEvidenceIds = schemaEvidenceIds?.slice(0, 12)
-            ?? (sourceRecordId ? [sourceRecordId] : evidenceIds.slice(0, 12));
+        if (requestTokens > prepared.contextWindow) throw new Error(`context limit exceeded: ${requestTokens}`);
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        if (prompt.includes('Read window')) {
           return Promise.resolve({
-            content: JSON.stringify({
-              notes: `Global working notes retain ${returnedEvidenceIds.join(', ')}.`,
-              evidenceIds: returnedEvidenceIds,
-            }),
+            content: '## Global working notes\n\nRetain the distinct arguments found so far.',
             model: 'test-model', finishReason: 'stop',
             usage: { inputTokens: 100, outputTokens: 20 },
           });
         }
         return Promise.resolve({
-          content: JSON.stringify({
-            title: 'Long lesson summary',
-            overview: { text: 'Supported overview. '.repeat(50), evidenceIds: [firstEvidenceId] },
-            sections: Array.from({ length: 8 }, (_, sectionIndex) => ({
-              heading: `Theme ${sectionIndex + 1}`,
-              summary: 'Supported section. '.repeat(20),
-              points: ['Supported point. '.repeat(12), 'Supported reason. '.repeat(12)],
-              evidenceIds: [firstEvidenceId],
-            })),
-            takeaways: ['Supported takeaway.'],
-            uncertainties: [],
-          }),
+          content: '# Long lesson summary\n\n## Main argument\n\nThe lesson develops its argument across the complete document.',
           model: 'test-model', finishReason: 'stop',
           usage: { inputTokens: 100, outputTokens: 20 },
         });
@@ -460,16 +459,140 @@ describe('AI security boundaries', () => {
     }, prepared);
 
     expect(calls.length).toBeGreaterThan(1);
-    expect(Math.max(...calls)).toBeLessThanOrEqual(8_000);
+    expect(Math.max(...calls)).toBeLessThanOrEqual(prepared.contextWindow);
     expect(prepared.processingMode).toBe('document-reader');
     expect(prepared.workingDocumentContent).toContain('[segment-00001 00:00:00.000]');
     expect(prompts.join('\n')).toContain('#working-notes');
     expect(prompts.join('\n')).not.toContain('partialSummaries');
-    expect(generated.summary.overview.evidenceIds[0]).toMatch(/^segment-/u);
+    expect(generated.summary.markdown).toContain('complete document');
     expect(generated.completion.usage).toEqual({ inputTokens: calls.length * 100, outputTokens: calls.length * 20 });
   });
 
-  it('keeps viewpoint-level evidence sparse when a local model returns every allowed subtitle id', async () => {
+  it('uses the full document in one call when a large model context can hold it', async () => {
+    const segments = Array.from({ length: 120 }, (_, index) => ({
+      startMs: index * 10_000,
+      text: `第 ${index + 1} 节围绕同一个核心论点展开，并补充原因、例子与结论。${'详细论证。'.repeat(40)}`,
+    }));
+    const constrained = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/context-test.md',
+      sourceRevision: 'revision-context-small',
+      title: '长上下文测试',
+      resource: 'assets/media/context-test.mp4',
+      segments,
+      contextWindow: 8_192,
+    });
+    const medium = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/context-test.md',
+      sourceRevision: 'revision-context-medium',
+      title: '长上下文测试',
+      resource: 'assets/media/context-test.mp4',
+      segments,
+      contextWindow: 32_768,
+    });
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/context-test.md',
+      sourceRevision: 'revision-context-large',
+      title: '长上下文测试',
+      resource: 'assets/media/context-test.mp4',
+      segments,
+      contextWindow: 1_000_000,
+    });
+    expect(constrained.processingMode).toBe('document-reader');
+    expect(medium.estimatedModelCalls).toBeLessThan(constrained.estimatedModelCalls);
+    expect(prepared.processingMode).toBe('direct');
+    expect(prepared.estimatedModelCalls).toBe(1);
+    expect(prepared.reservedOutputTokens).toBe(8_192);
+    expect(prepared.inputTokenBudget).toBeGreaterThan(prepared.estimatedInputTokens);
+
+    let calls = 0;
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        calls += 1;
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        expect(prompt).toContain('segment-00120');
+        return Promise.resolve({
+          content: '# 长上下文摘要\n\n## 核心论证\n\n作者通过原因、例子和结论展开观点，全文在同一次请求中完成归纳。',
+          model: 'large-context-model', finishReason: 'stop',
+        });
+      },
+    };
+    await generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://example.test', model: 'large-context-model', contextWindow: 1_000_000,
+    }, prepared);
+    expect(calls).toBe(1);
+  });
+
+  it('runs deep summaries as thinking analysis followed by non-thinking structuring', async () => {
+    const prepared = prepareTranscriptSummary({
+      sourcePath: 'bundles/personal/wiki/transcripts/deep-summary.md',
+      sourceRevision: 'revision-deep-summary',
+      title: '理想与现实的长期博弈',
+      resource: 'assets/media/deep-summary.mp4',
+      segments: [
+        { startMs: 0, text: '作者先界定理想主义与现实主义。' },
+        { startMs: 30_000, text: '随后讨论领导者的自我认知和长期传承。' },
+      ],
+      contextWindow: 1_000_000,
+      mode: 'deep',
+    });
+    expect(prepared).toMatchObject({
+      mode: 'deep', processingMode: 'direct', estimatedModelCalls: 2,
+      analysisOutputTokens: 32_768, reservedOutputTokens: 8_192,
+    });
+    const requests: AICompletionRequest[] = [];
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        requests.push(request);
+        if (request.reasoningMode === 'enabled') {
+          expect(request.responseFormat).toBe('text');
+          expect(request.responseSchema).toBeUndefined();
+          expect(request.messages.at(-1)?.content).toContain('segment-00002');
+          return Promise.resolve({
+            content: '## 核心观点\n作者分析理想与现实的冲突。[segment-00001]\n\n## 领导力\n领导者需要长期视角。[segment-00002]',
+            model: 'deepseek-v4-flash', finishReason: 'stop',
+            usage: { inputTokens: 500, outputTokens: 200 },
+          });
+        }
+        expect(request.reasoningMode).toBe('disabled');
+        expect(request.responseFormat).toBe('text');
+        expect(request.responseSchema).toBeUndefined();
+        expect(request.messages.at(-1)?.content).toContain('核心观点');
+        return Promise.resolve({
+          content: '# 理想、现实与领导力\n\n## 两种立场\n\n理想与现实形成长期张力。\n\n## 领导力\n\n领导者需要自我认知和长期视角。',
+          model: 'deepseek-v4-flash', finishReason: 'stop',
+          usage: { inputTokens: 100, outputTokens: 80 },
+        });
+      },
+    };
+    const generated = await generateTranscriptSummary(provider, {
+      providerId: 'test', endpoint: 'https://api.deepseek.com/v1/', model: 'deepseek-v4-flash', contextWindow: 1_000_000,
+    }, prepared);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({ reasoningMode: 'enabled', maxOutputTokens: 32_768 });
+    expect(requests[1]).toMatchObject({ reasoningMode: 'disabled', maxOutputTokens: 8_192 });
+    expect(generated.mode).toBe('deep');
+    expect(generated.completion.usage).toEqual({ inputTokens: 600, outputTokens: 280 });
+  });
+
+  it('reserves final output tokens before deciding whether the source fits directly', () => {
+    const input = {
+      sourcePath: 'bundles/personal/wiki/transcripts/output-budget.md',
+      sourceRevision: 'revision-output-budget',
+      title: '输出预算测试',
+      resource: 'assets/media/output-budget.mp4',
+      segments: [{ startMs: 0, text: '观点论证与例子。'.repeat(420) }],
+      contextWindow: 8_192,
+    } as const;
+    const defaultReserve = prepareTranscriptSummary(input);
+    const smallerReserve = prepareTranscriptSummary({ ...input, reservedOutputTokens: 1_280 });
+    expect(defaultReserve.processingMode).toBe('document-reader');
+    expect(smallerReserve.processingMode).toBe('direct');
+    expect(smallerReserve.inputTokenBudget).toBeGreaterThan(defaultReserve.inputTokenBudget);
+  });
+
+  it('keeps every long-document checkpoint without exposing internal segment ids', async () => {
     const prepared = prepareTranscriptSummary({
       sourcePath: 'bundles/personal/wiki/transcripts/dense-captions.md',
       sourceRevision: 'revision-dense',
@@ -481,67 +604,26 @@ describe('AI security boundaries', () => {
         text: `字幕句 ${index + 1} 说明视频观点的一个细节。`,
       })),
     });
-    let finalEvidenceAllowlistLength = 0;
     let readerCallCount = 0;
     const provider: AIProvider = {
       id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
       complete: (_config, request) => {
-        const properties = (request.responseSchema as {
-          readonly properties?: Record<string, unknown>;
-        } | undefined)?.properties;
-        if (!properties) throw new Error('The request did not provide a response schema.');
-        if ('notes' in properties) {
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        if (prompt.includes('Read window')) {
           readerCallCount += 1;
-          const evidenceIdSchema = properties.evidenceIds as {
-            readonly items?: { readonly enum?: readonly string[] };
-          };
-          const evidenceIds = evidenceIdSchema.items?.enum ?? [];
-          const dataMessage = request.messages.at(-1)?.content ?? '';
-          const serializedEnvelope = dataMessage
-            .replace(/^UNTRUSTED_DATA_JSON\n/u, '')
-            .replace(/\nEND_UNTRUSTED_DATA_JSON$/u, '');
-          const envelope = JSON.parse(serializedEnvelope) as {
-            readonly records: readonly { readonly sourceId: string; readonly content: string }[];
-          };
-          const visibleIds = [...new Set(envelope.records.flatMap((record) => (
-            record.content.match(/segment-\d{5}/gu) ?? []
-          )))];
-          expect(visibleIds.filter((id) => !evidenceIds.includes(id))).toEqual([]);
-          const returnedEvidenceIds = readerCallCount === 1 ? ['segment-00043'] : evidenceIds;
           return Promise.resolve({
-            content: JSON.stringify({
-              notes: `第 ${readerCallCount} 个阅读窗口保留的独立观点。`,
-              evidenceIds: returnedEvidenceIds,
-            }),
+            content: `## 检查点\n\n第 ${readerCallCount} 个阅读窗口保留的独立观点。`,
             model: 'test-model', finishReason: 'stop',
           });
         }
-        const overview = properties.overview as {
-          readonly properties?: { readonly evidenceIds?: { readonly items?: { readonly enum?: readonly string[] } } };
-        };
-        const sections = properties.sections as { readonly minItems?: number };
-        expect(sections.minItems).toBe(3);
-        const evidenceIds = overview.properties?.evidenceIds?.items?.enum ?? [];
-        finalEvidenceAllowlistLength = evidenceIds.length;
-        if (evidenceIds.length === 0) throw new Error('The final synthesis did not receive representative evidence.');
-        const finalPrompt = request.messages.map((message) => message.content).join('\n');
-        expect(finalPrompt).toContain('Checkpoints may contain ASR errors');
+        expect(request.responseFormat).toBe('text');
+        expect(request.responseSchema).toBeUndefined();
+        expect(prompt).toContain('Checkpoints may contain ASR errors');
         for (let index = 1; index <= readerCallCount; index += 1) {
-          expect(finalPrompt).toContain(`第 ${index} 个阅读窗口保留的独立观点。`);
+          expect(prompt).toContain(`第 ${index} 个阅读窗口保留的独立观点。`);
         }
         return Promise.resolve({
-          content: JSON.stringify({
-            title: '观点摘要',
-            overview: { text: '视频提出并论证了一个核心观点。', evidenceIds },
-            sections: Array.from({ length: 3 }, (_, index) => ({
-              heading: `主题 ${index + 1}`,
-              summary: '连续细节服务于同一论点。',
-              points: ['归纳观点。', '解释理由。'],
-              evidenceIds,
-            })),
-            takeaways: ['理解作者的核心论证。'],
-            uncertainties: [],
-          }),
+          content: '# 观点摘要\n\n视频提出并论证了一个核心观点，连续细节服务于同一论点。',
           model: 'test-model', finishReason: 'stop',
         });
       },
@@ -553,8 +635,7 @@ describe('AI security boundaries', () => {
 
     expect(prepared.processingMode).toBe('document-reader');
     expect(readerCallCount).toBeGreaterThan(1);
-    expect(finalEvidenceAllowlistLength).toBeLessThanOrEqual(24);
-    expect(generated.summary.overview.evidenceIds).toHaveLength(1);
-    expect(generated.summary.sections).toHaveLength(3);
+    expect(generated.summary.markdown).not.toMatch(/segment-\d{5}/u);
+    expect(generated.summary.markdown).toContain('核心观点');
   });
 });

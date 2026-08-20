@@ -42,8 +42,11 @@ describe('desktop AI summary workflow', () => {
       providerId: 'ollama',
       endpoint: 'http://localhost:11434/api',
       model: 'qwen3:8b',
+      contextWindow: 32_768,
     });
-    expect(await store.load()).toMatchObject({ endpoint: 'http://localhost:11434/api/', model: 'qwen3:8b' });
+    expect(await store.load()).toMatchObject({
+      endpoint: 'http://localhost:11434/api/', model: 'qwen3:8b', contextWindow: 32_768,
+    });
     expect(await readFile(configPath, 'utf8')).not.toContain('apiKey');
     expect(() => normalizeLocalOllamaEndpoint('https://models.example.test/api/')).toThrow(/本机 AI/);
   });
@@ -54,7 +57,10 @@ describe('desktop AI summary workflow', () => {
     const vault = await VaultRepository.open(join(root, 'vault'));
     await vault.initialize();
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
-      models: [{ type: 'llm', key: 'google/gemma-4-e4b', display_name: 'Gemma 4 E4B' }],
+      models: [{
+        type: 'llm', key: 'google/gemma-4-e4b', display_name: 'Gemma 4 E4B', max_context_length: 1_000_000,
+        loaded_instances: [{ config: { context_length: 131_072 } }],
+      }],
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
     const lmStudio = createLocalAIProviderResolver(fetchMock)('openai-compatible');
     const configStore = new AIDeviceConfigStore(join(root, 'ai.json'));
@@ -67,16 +73,17 @@ describe('desktop AI summary workflow', () => {
       },
     );
     await expect(service.probe('openai-compatible', 'http://127.0.0.1:1234')).resolves.toEqual([
-      { id: 'google/gemma-4-e4b', displayName: 'Gemma 4 E4B' },
+      { id: 'google/gemma-4-e4b', displayName: 'Gemma 4 E4B', contextWindow: 131_072 },
     ]);
     const requestedUrl = fetchMock.mock.calls[0]?.[0];
     expect(requestedUrl).toBeInstanceOf(URL);
     expect(requestedUrl instanceof URL ? requestedUrl.href : '').toBe('http://127.0.0.1:1234/api/v1/models');
-    await service.configure('openai-compatible', 'http://127.0.0.1:1234', 'google/gemma-4-e4b');
+    await service.configure('openai-compatible', 'http://127.0.0.1:1234', 'google/gemma-4-e4b', 131_072);
     expect(await configStore.load()).toMatchObject({
       providerId: 'openai-compatible',
       endpoint: 'http://127.0.0.1:1234/api/v1/',
       model: 'google/gemma-4-e4b',
+      contextWindow: 131_072,
     });
     vault.close();
   });
@@ -114,20 +121,7 @@ describe('desktop AI summary workflow', () => {
       complete: (_config, request) => {
         expect(request.messages.at(-1)?.content).toContain('segment-00002');
         return Promise.resolve({
-          content: JSON.stringify({
-            title: '安装教程摘要',
-            overview: { text: '安装前备份，安装后验证。', evidenceIds: ['segment-00001', 'segment-00002'] },
-            sections: [
-              {
-                heading: '准备与验证',
-                summary: '安装流程包含准备和验证两个阶段。',
-                points: ['先备份配置。', '安装后检查版本。'],
-                evidenceIds: ['segment-00001'],
-              },
-            ],
-            takeaways: ['先备份，再安装，最后验证。'],
-            uncertainties: [],
-          }),
+          content: '# 安装教程摘要\n\n## 准备与验证\n\n安装流程包含准备和验证两个阶段。\n\n- 先备份配置。\n- 安装后检查版本。\n\n## 总结与启发\n\n先备份，再安装，最后验证。',
           model: 'qwen3:8b',
           finishReason: 'stop',
           usage: { inputTokens: 100, outputTokens: 80 },
@@ -138,15 +132,14 @@ describe('desktop AI summary workflow', () => {
     const preparation = await service.prepare(transcript.path);
     expect(preparation).toMatchObject({
       dataDestination: 'local_ollama', estimatedCost: 0, suggestedTemplate: 'tutorial', segmentCount: 2,
+      contextWindow: 8_192, processingMode: 'direct', estimatedModelCalls: 1,
     });
     const pending = await service.generate(transcript.path, preparation.sourceRevision, preparation.suggestedTemplate);
     expect(pending).toMatchObject({ riskLevel: 'L1', model: 'qwen3:8b', usage: { inputTokens: 100, outputTokens: 80 } });
-    expect(pending.content).toContain('## 内容概览');
-    expect(pending.content).toContain('## 主题笔记');
-    expect(pending.content).toContain('### 准备与验证');
+    expect(pending.content).toContain('## 准备与验证');
     expect(pending.content).toContain('## 总结与启发');
-    expect(pending.content).toContain('[定位 00:01](assets/media/lesson.mp4#t=1.000)');
-    expect(pending.content).not.toContain('## 转录存疑');
+    expect(pending.content).not.toContain('[定位');
+    expect(pending.content).not.toContain('segment-');
     const workingDocument = await vault.read(`.oldfolio/cache/ai-inputs/${preparation.sourceRevision}.txt`);
     expect(workingDocument.text).toContain('[segment-00001 00:00:01.000]');
     await expect(vault.read(pending.targetPath)).rejects.toBeInstanceOf(VaultNotFoundError);

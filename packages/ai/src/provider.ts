@@ -32,6 +32,9 @@ export interface ProviderOptions {
   ) => Promise<{ readonly bytes: Uint8Array; readonly fileName: string; readonly mimeType: string }>;
   /** Some OpenAI-compatible services support JSON objects but not strict JSON Schema response formats. */
   readonly structuredOutputMode?: 'json-schema' | 'json-object';
+  /** Maps the shared per-request reasoning switch to a provider-specific request shape. */
+  readonly reasoningDialect?: 'qwen' | 'deepseek';
+  readonly defaultReasoningMode?: 'provider-default' | 'disabled' | 'enabled';
 }
 
 export class AIProviderError extends Error {
@@ -209,6 +212,12 @@ function supportsOnlyJsonTranscription(model: string): boolean {
   return /^gpt-4o(?:-mini)?-transcribe(?:-|$)/iu.test(model.trim());
 }
 
+function discoveredContextWindow(...values: readonly unknown[]): number | undefined {
+  return values.find((value): value is number => (
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 4_096 && value <= 10_000_000
+  ));
+}
+
 export class OpenAICompatibleProvider extends HttpAIProvider {
   readonly id = 'openai-compatible';
   readonly displayName = 'OpenAI-compatible';
@@ -224,10 +233,28 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
       { method: 'GET' },
       config,
       context,
-    )) as { readonly data?: readonly { readonly id?: unknown }[] };
+    )) as { readonly data?: readonly {
+      readonly id?: unknown;
+      readonly context_window?: unknown;
+      readonly context_length?: unknown;
+      readonly max_context_length?: unknown;
+    }[] };
     return (response.data ?? [])
-      .filter((item): item is { readonly id: string } => typeof item.id === 'string')
-      .map((item) => ({ id: item.id, displayName: item.id, capabilities: ['chat'], local: false }));
+      .filter((item): item is typeof item & { readonly id: string } => typeof item.id === 'string')
+      .map((item) => {
+        const contextWindow = discoveredContextWindow(
+          item.context_window,
+          item.context_length,
+          item.max_context_length,
+        );
+        return {
+          id: item.id,
+          displayName: item.id,
+          capabilities: ['chat'],
+          local: false,
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+        };
+      });
   }
 
   async complete(
@@ -235,6 +262,12 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
     request: AICompletionRequest,
     context?: AIInvocationContext,
   ): Promise<AICompletion> {
+    const reasoningMode = request.reasoningMode ?? this.options.defaultReasoningMode ?? 'provider-default';
+    const reasoningBody = this.options.reasoningDialect === 'qwen' && reasoningMode !== 'provider-default'
+      ? { enable_thinking: reasoningMode === 'enabled' }
+      : this.options.reasoningDialect === 'deepseek' && reasoningMode !== 'provider-default'
+        ? { thinking: { type: reasoningMode } }
+        : {};
     const response = (await this.requestJson(
       resolveEndpoint(this.endpoint(config), 'chat/completions'),
       {
@@ -243,6 +276,7 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
         body: JSON.stringify({
           model: request.model,
           messages: request.messages,
+          ...reasoningBody,
           ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
           ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),
           ...(request.responseSchema === undefined
@@ -265,7 +299,11 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
     const choice = response.choices?.[0];
     if (choice?.message?.content === '' && choice.finish_reason === 'length'
       && (typeof choice.message.reasoning_content === 'string' || typeof choice.message.reasoning === 'string')) {
-      throw new AIProviderError('AI provider used the entire output limit for reasoning and returned no final answer.');
+      throw new AIProviderError(
+        '模型把输出额度全部用于思考，没有生成最终摘要。请关闭该模型的思考模式，或提高模型上下文窗口后重试。',
+        undefined,
+        'REASONING_OUTPUT_EXHAUSTED',
+      );
     }
     if (typeof choice?.message?.content !== 'string' || !choice.message.content.trim()) {
       throw new AIProviderError('AI provider response did not contain text content.');
@@ -404,17 +442,28 @@ export class LMStudioProvider extends HttpAIProvider {
         readonly type?: unknown;
         readonly key?: unknown;
         readonly display_name?: unknown;
+        readonly max_context_length?: unknown;
+        readonly loaded_instances?: readonly {
+          readonly config?: { readonly context_length?: unknown };
+        }[];
       }[];
     };
     return (response.models ?? [])
-      .filter((item): item is { readonly type: 'llm'; readonly key: string; readonly display_name?: string } =>
+      .filter((item): item is typeof item & { readonly type: 'llm'; readonly key: string } =>
         item.type === 'llm' && typeof item.key === 'string')
-      .map((item) => ({
-        id: item.key,
-        displayName: typeof item.display_name === 'string' ? item.display_name : item.key,
-        capabilities: ['chat'],
-        local: true,
-      }));
+      .map((item) => {
+        const contextWindow = discoveredContextWindow(
+          item.loaded_instances?.[0]?.config?.context_length,
+          item.max_context_length,
+        );
+        return {
+          id: item.key,
+          displayName: typeof item.display_name === 'string' ? item.display_name : item.key,
+          capabilities: ['chat'],
+          local: true,
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+        };
+      });
   }
 
   async complete(

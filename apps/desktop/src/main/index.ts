@@ -720,9 +720,10 @@ function registerIpc(): void {
     if (
       (value.providerId !== 'ollama' && value.providerId !== 'openai-compatible') ||
       typeof value.endpoint !== 'string' ||
-      typeof value.model !== 'string'
+      typeof value.model !== 'string' ||
+      typeof value.contextWindow !== 'number'
     ) throw new TypeError('Invalid AI settings');
-    return requireAISummary().configure(value.providerId, value.endpoint, value.model);
+    return requireAISummary().configure(value.providerId, value.endpoint, value.model, value.contextWindow);
   });
   ipcMain.handle('ai:probe-online-provider', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -742,6 +743,7 @@ function registerIpc(): void {
       typeof value.endpoint !== 'string' || typeof value.apiKey !== 'string'
       || typeof value.chatModel !== 'string'
       || (value.transcriptionModel !== undefined && typeof value.transcriptionModel !== 'string')
+      || typeof value.contextWindow !== 'number'
       || typeof value.hostConfirmed !== 'boolean'
     ) throw new TypeError('Invalid online AI settings');
     const presets = ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini'] as const;
@@ -753,6 +755,7 @@ function registerIpc(): void {
       endpoint: value.endpoint,
       apiKey: value.apiKey,
       chatModel: value.chatModel,
+      contextWindow: value.contextWindow,
       ...(typeof value.transcriptionModel === 'string' ? { transcriptionModel: value.transcriptionModel } : {}),
       hostConfirmed: value.hostConfirmed,
     });
@@ -781,8 +784,9 @@ function registerIpc(): void {
     if (
       typeof value.path !== 'string'
       || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+      || (value.mode !== 'fast' && value.mode !== 'deep')
     ) throw new TypeError('Invalid transcript summary preparation');
-    return requireAISummary().prepare(value.path, value.executionTarget);
+    return requireAISummary().prepare(value.path, value.executionTarget, value.mode);
   });
   ipcMain.handle('ai:generate-summary', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -793,6 +797,7 @@ function registerIpc(): void {
       typeof value.sourceRevision !== 'string' ||
       typeof value.template !== 'string' ||
       (value.executionTarget !== 'local' && value.executionTarget !== 'online') ||
+      (value.mode !== 'fast' && value.mode !== 'deep') ||
       !(SUMMARY_TEMPLATES as readonly string[]).includes(value.template)
     ) {
       throw new TypeError('Invalid AI summary request');
@@ -806,6 +811,7 @@ function registerIpc(): void {
         value.template as (typeof SUMMARY_TEMPLATES)[number],
         controller.signal,
         value.executionTarget,
+        value.mode,
       );
     } finally {
       activeAITasks.delete(controller);
