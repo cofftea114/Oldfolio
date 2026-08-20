@@ -785,8 +785,9 @@ function registerIpc(): void {
       typeof value.path !== 'string'
       || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
       || (value.mode !== 'fast' && value.mode !== 'deep')
+      || (value.outputLanguage !== 'auto' && value.outputLanguage !== 'zh-CN' && value.outputLanguage !== 'en')
     ) throw new TypeError('Invalid transcript summary preparation');
-    return requireAISummary().prepare(value.path, value.executionTarget, value.mode);
+    return requireAISummary().prepare(value.path, value.executionTarget, value.mode, value.outputLanguage);
   });
   ipcMain.handle('ai:generate-summary', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -798,6 +799,7 @@ function registerIpc(): void {
       typeof value.template !== 'string' ||
       (value.executionTarget !== 'local' && value.executionTarget !== 'online') ||
       (value.mode !== 'fast' && value.mode !== 'deep') ||
+      (value.outputLanguage !== 'auto' && value.outputLanguage !== 'zh-CN' && value.outputLanguage !== 'en') ||
       !(SUMMARY_TEMPLATES as readonly string[]).includes(value.template)
     ) {
       throw new TypeError('Invalid AI summary request');
@@ -812,6 +814,7 @@ function registerIpc(): void {
         controller.signal,
         value.executionTarget,
         value.mode,
+        value.outputLanguage,
       );
     } finally {
       activeAITasks.delete(controller);

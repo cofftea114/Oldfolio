@@ -120,8 +120,12 @@ describe('desktop AI summary workflow', () => {
       listModels: () => Promise.resolve([{ id: 'qwen3:8b', displayName: 'qwen3:8b', capabilities: ['chat'], local: true }]),
       complete: (_config, request) => {
         expect(request.messages.at(-1)?.content).toContain('segment-00002');
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        const english = prompt.includes('complete output in natural English');
         return Promise.resolve({
-          content: '# 安装教程摘要\n\n## 准备与验证\n\n安装流程包含准备和验证两个阶段。\n\n- 先备份配置。\n- 安装后检查版本。\n\n## 总结与启发\n\n先备份，再安装，最后验证。',
+          content: english
+            ? '# Installation guide summary\n\n## Preparation and verification\n\nBack up the configuration before installation, then verify the installed version.'
+            : '# 安装教程摘要\n\n## 准备与验证\n\n安装流程包含准备和验证两个阶段。\n\n- 先备份配置。\n- 安装后检查版本。\n\n## 总结与启发\n\n先备份，再安装，最后验证。',
           model: 'qwen3:8b',
           finishReason: 'stop',
           usage: { inputTokens: 100, outputTokens: 80 },
@@ -152,6 +156,22 @@ describe('desktop AI summary workflow', () => {
       type: 'Synthesis', oldfolio: { summary_template: 'tutorial', source_path: transcript.path },
     });
     expect((await vault.read(transcript.path)).text).toBe(transcript.content);
+
+    const englishPreparation = await service.prepare(transcript.path, 'local', 'fast', 'en');
+    expect(englishPreparation).toMatchObject({ requestedOutputLanguage: 'en', outputLanguage: 'en' });
+    const englishPreview = await service.generate(
+      transcript.path,
+      englishPreparation.sourceRevision,
+      englishPreparation.suggestedTemplate,
+      undefined,
+      'local',
+      'fast',
+      'en',
+    );
+    expect(englishPreview).toMatchObject({ riskLevel: 'L1', outputLanguage: 'en' });
+    expect(englishPreview.targetPath).toMatch(/-en\.md$/u);
+    expect(englishPreview.content).toContain('summary_language: en');
+    expect(englishPreview.content).toContain('# Installation guide summary');
 
     const updatePreview = await service.generate(
       transcript.path,

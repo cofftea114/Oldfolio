@@ -35,7 +35,10 @@ const api: OldfolioDesktopApi = {
   saveAISettings: (input) => ipcRenderer.invoke('ai:save-settings', input),
   saveOnlineAISettings: (input) => ipcRenderer.invoke('ai:save-online-settings', input),
   saveCloudTranscriptionSettings: (input) => ipcRenderer.invoke('ai:save-cloud-transcription-settings', input),
-  prepareAISummary: (path, executionTarget, mode) => ipcRenderer.invoke('ai:prepare-summary', { path, executionTarget, mode }),
+  prepareAISummary: (path, executionTarget, mode, outputLanguage) => ipcRenderer.invoke(
+    'ai:prepare-summary',
+    { path, executionTarget, mode, outputLanguage },
+  ),
   generateAISummary: (input) => ipcRenderer.invoke('ai:generate-summary', input),
   applyAIChangeSet: (changeSetId) => ipcRenderer.invoke('ai:apply-changeset', changeSetId),
   undoAIChangeSet: (historyId) => ipcRenderer.invoke('ai:undo-changeset', historyId),

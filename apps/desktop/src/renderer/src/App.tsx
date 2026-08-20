@@ -27,6 +27,7 @@ import type {
   AIPendingSummaryChange,
   AISettingsSummary,
   AISummaryExecutionTarget,
+  AISummaryLanguage,
   AISummaryMode,
   AISummaryPreparation,
   AISummaryTemplate,
@@ -59,6 +60,12 @@ const SUMMARY_TEMPLATE_LABELS: Readonly<Record<AISummaryTemplate, string>> = {
   'news-commentary': '观点 / 时事评论',
   debate: '辩论',
   review: '评测',
+};
+
+const SUMMARY_LANGUAGE_LABELS: Readonly<Record<AISummaryLanguage, string>> = {
+  auto: '自动跟随转录',
+  'zh-CN': '简体中文',
+  en: 'English',
 };
 
 const LOCAL_AI_PROVIDER_LABELS: Readonly<Record<AILocalProviderId, string>> = {
@@ -160,6 +167,7 @@ export function App() {
   const [summaryPreparation, setSummaryPreparation] = useState<AISummaryPreparation | null>(null);
   const [summaryTemplate, setSummaryTemplate] = useState<AISummaryTemplate>('course');
   const [summaryMode, setSummaryMode] = useState<AISummaryMode>('fast');
+  const [summaryLanguage, setSummaryLanguage] = useState<AISummaryLanguage>('auto');
   const [pendingSummary, setPendingSummary] = useState<AIPendingSummaryChange | null>(null);
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
@@ -449,7 +457,12 @@ export function App() {
     setAppliedChange(null);
     setStatus('正在准备摘要数据披露…');
     try {
-      const preparation = await window.oldfolio.prepareAISummary(active.path, aiExecutionTarget, summaryMode);
+      const preparation = await window.oldfolio.prepareAISummary(
+        active.path,
+        aiExecutionTarget,
+        summaryMode,
+        summaryLanguage,
+      );
       setSummaryPreparation(preparation);
       setSummaryTemplate(preparation.suggestedTemplate);
       setStatus('请确认发送内容和摘要模板');
@@ -475,6 +488,7 @@ export function App() {
         template: summaryTemplate,
         executionTarget: summaryPreparation.executionTarget,
         mode: summaryPreparation.mode,
+        outputLanguage: summaryPreparation.requestedOutputLanguage,
       });
       setPendingSummary(pending);
       setStatus('AI 摘要变更集已生成，等待批准');
@@ -1335,7 +1349,19 @@ export function App() {
                     <option disabled={aiExecutionTarget !== 'online'} value="deep">深度摘要 · 思考分析后整理 · 2 次调用</option>
                   </select>
                 </label>
-                <small className="ai-hint">深度摘要第一阶段使用自然语言理解全文，第二阶段关闭思考并生成笔记结构；会增加一次模型调用和相应费用。</small>
+                <label className="field-label">输出语言
+                  <select
+                    disabled={aiBusy}
+                    value={summaryLanguage}
+                    onChange={(event) => setSummaryLanguage(event.target.value as AISummaryLanguage)}
+                  >
+                    <option value="auto">自动跟随转录</option>
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en">English</option>
+                  </select>
+                </label>
+                <small className="ai-hint">指定语言会创建独立版本，不会覆盖“自动”摘要或另一种语言的摘要。</small>
+                <small className="ai-hint">深度摘要第一阶段使用自然语言理解全文，第二阶段关闭思考并编辑润色；会增加一次模型调用和相应费用。</small>
                 <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
                   {aiBusy ? '准备中…' : '准备摘要'}
                 </button>
@@ -1351,6 +1377,10 @@ export function App() {
                     : `本机 ${LOCAL_AI_PROVIDER_LABELS[summaryPreparation.providerId]}`}</dd></div>
                   <div><dt>模型</dt><dd>{summaryPreparation.model}</dd></div>
                   <div><dt>模式</dt><dd>{summaryPreparation.mode === 'deep' ? '深度摘要（两阶段）' : '快速摘要'}</dd></div>
+                  <div><dt>输出语言</dt><dd>{SUMMARY_LANGUAGE_LABELS[summaryPreparation.requestedOutputLanguage]}
+                    {summaryPreparation.requestedOutputLanguage === 'auto'
+                      ? `（识别为 ${SUMMARY_LANGUAGE_LABELS[summaryPreparation.outputLanguage]}）`
+                      : ''}</dd></div>
                   <div><dt>片段</dt><dd>{summaryPreparation.segmentCount}</dd></div>
                   <div><dt>预计输入</dt><dd>约 {summaryPreparation.estimatedInputTokens.toLocaleString()} tokens</dd></div>
                   <div><dt>上下文</dt><dd>{summaryPreparation.contextWindow.toLocaleString()} tokens</dd></div>
@@ -1389,7 +1419,7 @@ export function App() {
             {pendingSummary && (
               <div className="ai-review">
                 <div className="ai-risk"><span>{pendingSummary.riskLevel}</span> {pendingSummary.riskLevel === 'L1' ? '新建 AI 文件' : '更新 AI Wiki'}</div>
-                <p><strong>{pendingSummary.targetPath}</strong><br />{pendingSummary.citations.length} 条时间戳证据 · {pendingSummary.model}</p>
+                <p><strong>{pendingSummary.targetPath}</strong><br />Markdown 摘要 · {SUMMARY_LANGUAGE_LABELS[pendingSummary.outputLanguage]} · {pendingSummary.model}</p>
                 <details>
                   <summary>审阅生成内容</summary>
                   <pre>{pendingSummary.content}</pre>

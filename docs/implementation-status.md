@@ -58,8 +58,9 @@ claim that the planned 9–12 month v1 is complete.
   working document is stored in the non-synchronized cache. Long inputs within the 200,000-character
   safety limit are read through bounded windows into viewpoint-level notebook checkpoints rather than
   independent summaries. The final synthesis retains coverage across the whole document, deterministically
-  follows the transcript's Chinese/English language, and uses one representative playback anchor per viewpoint;
-  original evidence IDs remain validated at every step. Preview the complete OKF `Synthesis` content and diff,
+  follows the transcript's Chinese/English language by default, or explicitly generates Simplified Chinese or
+  English. Explicit language versions use separate paths and stable IDs so translations coexist. Summary output
+  is readable Markdown rather than schema-bound JSON. Preview the complete OKF `Synthesis` content and diff,
   and apply or undo the resulting L1/L2 change set.
 - Configure transcription and summary independently for local or online execution. Online summaries
   provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
@@ -97,9 +98,9 @@ claim that the planned 9–12 month v1 is complete.
 - Production WebDAV transport and folder-sync conflict UI.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
-- Processing transcripts above the current 200,000-character safety limit, summary translation,
-  AI chat, and reusable concept extraction across multiple transcripts.
+- Processing transcripts above the current 200,000-character safety limit, AI chat, and reusable concept
+  extraction across multiple transcripts.
 
-The next product increment should add reusable Concept extraction and summary translation, then
-connect OS credential stores for persistent OpenAI-compatible BYOK without weakening the current
+The next product increment should add reusable Concept extraction, then connect OS credential stores
+for persistent OpenAI-compatible BYOK without weakening the current
 payload-disclosure and no-secret-in-Vault boundaries.

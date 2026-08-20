@@ -10,6 +10,7 @@ import {
   prepareTranscriptSummary,
   type PreparedTranscriptSummary,
   type SummaryTemplate,
+  type TranscriptSummaryLanguage,
   type TranscriptSummaryMode,
 } from '@oldfolio/ai';
 import type {
@@ -46,6 +47,8 @@ export interface AISummaryPreparation {
   readonly sourceCharacters: number;
   readonly estimatedInputTokens: number;
   readonly mode: TranscriptSummaryMode;
+  readonly requestedOutputLanguage: TranscriptSummaryLanguage;
+  readonly outputLanguage: Exclude<TranscriptSummaryLanguage, 'auto'>;
   readonly contextWindow: number;
   readonly reservedOutputTokens: number;
   readonly analysisOutputTokens: number;
@@ -69,6 +72,7 @@ export interface AIPendingSummaryChange {
   readonly targetPath: string;
   readonly sourcePath: string;
   readonly template: SummaryTemplate;
+  readonly outputLanguage: Exclude<TranscriptSummaryLanguage, 'auto'>;
   readonly content: string;
   readonly diff: string;
   readonly citations: readonly WikiCitation[];
@@ -131,9 +135,10 @@ function markdownText(value: string): string {
     .trim();
 }
 
-function summaryPath(sourcePath: string): string {
+function summaryPath(sourcePath: string, language: TranscriptSummaryLanguage): string {
   const stem = parse(sourcePath).name.normalize('NFC').replaceAll(/[^a-zA-Z0-9._-]/gu, '-').replaceAll(/-+/gu, '-').slice(0, 52) || 'transcript';
-  return `bundles/personal/wiki/summaries/${stem}-${sha256(sourcePath).slice(0, 16)}.md`;
+  const languageSuffix = language === 'auto' ? '' : `-${language.toLowerCase()}`;
+  return `bundles/personal/wiki/summaries/${stem}-${sha256(sourcePath).slice(0, 16)}${languageSuffix}.md`;
 }
 
 function replacementDiff(path: string, previous: string | null, content: string): string {
@@ -197,11 +202,12 @@ export class AISummaryService {
     sourcePath: string,
     executionTarget: AISummaryExecutionTarget = 'local',
     mode: TranscriptSummaryMode = 'fast',
+    outputLanguage: TranscriptSummaryLanguage = 'auto',
   ): Promise<AISummaryPreparation> {
     if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget);
     const { config } = execution;
-    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode);
+    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode, outputLanguage);
     return {
       sourcePath: prepared.sourcePath,
       sourceRevision: prepared.sourceRevision,
@@ -212,6 +218,8 @@ export class AISummaryService {
       sourceCharacters: prepared.sourceCharacters,
       estimatedInputTokens: prepared.estimatedInputTokens,
       mode: prepared.mode,
+      requestedOutputLanguage: prepared.requestedOutputLanguage,
+      outputLanguage: prepared.outputLanguage,
       contextWindow: prepared.contextWindow,
       reservedOutputTokens: prepared.reservedOutputTokens,
       analysisOutputTokens: prepared.analysisOutputTokens,
@@ -237,12 +245,13 @@ export class AISummaryService {
     signal?: AbortSignal,
     executionTarget: AISummaryExecutionTarget = 'local',
     mode: TranscriptSummaryMode = 'fast',
+    outputLanguage: TranscriptSummaryLanguage = 'auto',
   ): Promise<AIPendingSummaryChange> {
     if (!(SUMMARY_TEMPLATES as readonly string[]).includes(template)) throw new Error('摘要模板无效。');
     if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget, signal);
     const { config } = execution;
-    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode);
+    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode, outputLanguage);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
     await this.ensureWorkingDocument(prepared);
     const generated = await generateTranscriptSummary(
@@ -252,15 +261,16 @@ export class AISummaryService {
       template,
       execution.context,
     );
-    const targetPath = summaryPath(sourcePath);
+    const targetPath = summaryPath(sourcePath, prepared.requestedOutputLanguage);
     const existing = await this.readOptional(targetPath);
-    const logicalId = `synthesis-${sha256(sourcePath).slice(0, 24)}`;
+    const logicalId = `synthesis-${sha256(`${sourcePath}:${prepared.requestedOutputLanguage}`).slice(0, 24)}`;
     const body = [
       `# ${markdownText(generated.summary.title)}`,
       '',
       `> 来源：[[${sourcePath}|原始转录]]`,
       `> 摘要方式：${summaryTemplateLabels[generated.template]}`,
       `> 生成模式：${generated.mode === 'deep' ? '深度摘要（思考分析 + 编辑润色）' : '快速摘要'}`,
+      `> 输出语言：${generated.outputLanguage === 'zh-CN' ? '简体中文' : 'English'}`,
       '> 提示：本笔记根据自动转录生成；原转录可能存在识别错误，可打开上方原始转录核对。',
       '',
       generated.summary.markdown,
@@ -279,6 +289,8 @@ export class AISummaryService {
           source_revision: sourceRevision,
           summary_template: generated.template,
           summary_mode: generated.mode,
+          summary_language: generated.outputLanguage,
+          requested_summary_language: prepared.requestedOutputLanguage,
           prompt_version: generated.promptVersion,
         },
       },
@@ -299,7 +311,7 @@ export class AISummaryService {
       generator: { providerId: config.providerId, model: generated.completion.model, promptVersion: generated.promptVersion },
       riskLevel,
       items: [{
-        id: `summary-${sha256(`${sourcePath}:${sourceRevision}`).slice(0, 16)}`,
+        id: `summary-${sha256(`${sourcePath}:${sourceRevision}:${prepared.requestedOutputLanguage}`).slice(0, 16)}`,
         summary: existing ? '更新 AI 摘要' : '创建 AI 摘要',
         riskLevel,
         operation,
@@ -317,6 +329,7 @@ export class AISummaryService {
       targetPath,
       sourcePath,
       template,
+      outputLanguage: generated.outputLanguage,
       content,
       diff,
       citations,
@@ -347,6 +360,7 @@ export class AISummaryService {
     sourcePath: string,
     contextWindow?: number,
     mode: TranscriptSummaryMode = 'fast',
+    outputLanguage: TranscriptSummaryLanguage = 'auto',
   ): Promise<PreparedTranscriptSummary> {
     const snapshot = await this.repository.read(sourcePath);
     const manifest = parseTranscriptPlaybackManifest(snapshot.text, snapshot.path);
@@ -358,6 +372,7 @@ export class AISummaryService {
       resource: manifest.resource,
       segments: manifest.segments,
       mode,
+      outputLanguage,
       ...(contextWindow === undefined ? {} : { contextWindow }),
     });
   }

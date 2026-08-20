@@ -33,6 +33,8 @@ const MIN_DOCUMENT_WINDOW_TOKENS = 512;
 const PROMPT_VERSION = 'transcript-summary-v10-markdown-first';
 
 export type TranscriptSummaryMode = 'fast' | 'deep';
+export type TranscriptSummaryLanguage = 'auto' | 'zh-CN' | 'en';
+export type ResolvedTranscriptSummaryLanguage = Exclude<TranscriptSummaryLanguage, 'auto'>;
 
 export interface TranscriptSummarySegment {
   readonly startMs: number;
@@ -48,6 +50,7 @@ export interface PrepareTranscriptSummaryInput {
   readonly resource: string;
   readonly segments: readonly TranscriptSummarySegment[];
   readonly mode?: TranscriptSummaryMode;
+  readonly outputLanguage?: TranscriptSummaryLanguage;
   /** Effective model context window, including input and output tokens. */
   readonly contextWindow?: number;
   /** Tokens reserved for the final structured summary response. */
@@ -82,6 +85,8 @@ export interface PreparedTranscriptSummary {
   readonly sourceCharacters: number;
   readonly estimatedInputTokens: number;
   readonly mode: TranscriptSummaryMode;
+  readonly requestedOutputLanguage: TranscriptSummaryLanguage;
+  readonly outputLanguage: ResolvedTranscriptSummaryLanguage;
   readonly contextWindow: number;
   readonly reservedOutputTokens: number;
   readonly analysisOutputTokens: number;
@@ -97,6 +102,7 @@ export interface GenerateTranscriptSummaryResult {
   readonly template: SummaryTemplate;
   readonly promptVersion: string;
   readonly mode: TranscriptSummaryMode;
+  readonly outputLanguage: ResolvedTranscriptSummaryLanguage;
 }
 
 const templateGuidance: Readonly<Record<SummaryTemplate, string>> = {
@@ -137,20 +143,20 @@ interface SummaryContextBudget {
   readonly windowTokenBudget: number;
 }
 
-type SummaryOutputLanguage = 'Simplified Chinese' | 'English';
-
-function detectSummaryOutputLanguage(prepared: Pick<PreparedTranscriptSummary, 'title' | 'evidence'>): SummaryOutputLanguage {
+function detectSummaryOutputLanguage(
+  prepared: Pick<PreparedTranscriptSummary, 'title' | 'evidence'>,
+): ResolvedTranscriptSummaryLanguage {
   const sample = `${prepared.title}\n${prepared.evidence.map((item) => item.text).join('\n')}`;
   const hanCharacters = sample.match(/[\p{Script=Han}]/gu)?.length ?? 0;
   const latinCharacters = sample.match(/[a-zA-Z]/gu)?.length ?? 0;
-  return hanCharacters >= Math.max(8, Math.ceil(latinCharacters / 2)) ? 'Simplified Chinese' : 'English';
+  return hanCharacters >= Math.max(8, Math.ceil(latinCharacters / 2)) ? 'zh-CN' : 'en';
 }
 
-function outputLanguageInstruction(language: SummaryOutputLanguage): string {
-  if (language === 'Simplified Chinese') {
-    return 'Every generated text field must use Simplified Chinese, including working notes, title, overview, section headings, points, takeaways, and uncertainties. Never answer in English.';
+function outputLanguageInstruction(language: ResolvedTranscriptSummaryLanguage): string {
+  if (language === 'zh-CN') {
+    return 'Write the complete output in natural Simplified Chinese, including the title, headings, prose, and lists. Translate English source material when necessary; keep established proper names accurate.';
   }
-  return 'Every generated text field must use English, including working notes, title, overview, section headings, points, takeaways, and uncertainties.';
+  return 'Write the complete output in natural English, including the title, headings, prose, and lists. Translate Chinese source material when necessary; keep established proper names accurate.';
 }
 
 function displayTimestamp(milliseconds: number): string {
@@ -332,6 +338,10 @@ export function prepareTranscriptSummary(input: PrepareTranscriptSummaryInput): 
   if (!input.resource.trim()) throw new Error('A transcript media resource is required.');
   if (input.segments.length === 0) throw new Error('A transcript requires at least one evidence segment.');
   const mode = input.mode ?? 'fast';
+  const requestedOutputLanguage = input.outputLanguage ?? 'auto';
+  if (!['auto', 'zh-CN', 'en'].includes(requestedOutputLanguage)) {
+    throw new Error(`Unsupported transcript summary language: ${requestedOutputLanguage}`);
+  }
 
   const evidence = input.segments.map((segment, index) => {
     if (!Number.isSafeInteger(segment.startMs) || segment.startMs < 0 || !segment.text.trim()) {
@@ -372,6 +382,9 @@ export function prepareTranscriptSummary(input: PrepareTranscriptSummaryInput): 
   );
   const processingMode = estimatedInputTokens <= budget.directInputTokenBudget ? 'direct' : 'document-reader';
   const windows = processingMode === 'direct' ? [] : buildDocumentWindows(evidence, budget.windowTokenBudget);
+  const outputLanguage = requestedOutputLanguage === 'auto'
+    ? detectSummaryOutputLanguage({ title: input.title, evidence })
+    : requestedOutputLanguage;
   return Object.freeze({
     sourcePath: input.sourcePath,
     sourceRevision: input.sourceRevision,
@@ -385,6 +398,8 @@ export function prepareTranscriptSummary(input: PrepareTranscriptSummaryInput): 
     sourceCharacters: workingDocumentContent.length,
     estimatedInputTokens,
     mode,
+    requestedOutputLanguage,
+    outputLanguage,
     contextWindow: budget.contextWindow,
     reservedOutputTokens: budget.reservedOutputTokens,
     analysisOutputTokens: budget.analysisOutputTokens,
@@ -457,7 +472,7 @@ async function readDocumentWindow(
   windowIndex: number,
   windowCount: number,
   previousNotes: string,
-  outputLanguage: SummaryOutputLanguage,
+  outputLanguage: ResolvedTranscriptSummaryLanguage,
   context?: AIInvocationContext,
 ): Promise<{
   readonly notes: string;
@@ -532,7 +547,7 @@ async function completeDeepAnalysis(
   sourceId: string,
   mediaType: string,
   content: string,
-  outputLanguage: SummaryOutputLanguage,
+  outputLanguage: ResolvedTranscriptSummaryLanguage,
   context?: AIInvocationContext,
 ): Promise<AICompletion> {
   const task = [
@@ -583,7 +598,7 @@ export async function generateTranscriptSummary(
 ): Promise<GenerateTranscriptSummaryResult> {
   assertTemplate(requestedTemplate);
   if (!config.model.trim()) throw new Error('An AI model must be selected before generating a summary.');
-  const outputLanguage = detectSummaryOutputLanguage(prepared);
+  const outputLanguage = prepared.outputLanguage;
   const task = [
     `Create a ${requestedTemplate} summary in the language primarily used by the transcript.`,
     `The source title is: ${prepared.title}.`,
@@ -621,6 +636,7 @@ export async function generateTranscriptSummary(
       template: requestedTemplate,
       promptVersion: PROMPT_VERSION,
       mode: prepared.mode,
+      outputLanguage,
     });
   }
 
@@ -655,6 +671,7 @@ export async function generateTranscriptSummary(
       template: requestedTemplate,
       promptVersion: PROMPT_VERSION,
       mode: prepared.mode,
+      outputLanguage,
     });
   }
 
@@ -708,6 +725,7 @@ export async function generateTranscriptSummary(
       template: requestedTemplate,
       promptVersion: PROMPT_VERSION,
       mode: prepared.mode,
+      outputLanguage,
     });
   }
 
@@ -730,5 +748,6 @@ export async function generateTranscriptSummary(
     template: requestedTemplate,
     promptVersion: PROMPT_VERSION,
     mode: prepared.mode,
+    outputLanguage,
   });
 }

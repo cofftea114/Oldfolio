@@ -78,12 +78,14 @@ burned-in subtitles require a future OCR pipeline.
    working document, destination, model, automatic template, estimated input size, and cost disclosure
    before sending it. Oldfolio writes a revision-bound plain-text working document under
    `.oldfolio/cache/ai-inputs/`. If it does not fit a typical local-model context, the model reads
-   bounded windows while maintaining one global set of notes, then produces the final synthesis with
-   original timestamp evidence IDs. It does not create independent summaries and mechanically merge them.
+   bounded windows while maintaining one global set of notes, then produces one readable Markdown
+   synthesis. It does not create independent summaries and mechanically merge them.
+   Choose automatic source-language output, Simplified Chinese, or English before generation. Explicit
+   language choices create independent OKF notes so translated versions can coexist.
 5. Review the generated OKF `Synthesis` document and diff. Nothing is written until **Approve and
    write to Vault** is selected; the resulting write can be atomically undone while unchanged.
 
-LM Studio uses its native v1 chat API with reasoning disabled for schema-bound knowledge tasks. The AI
+LM Studio uses its native v1 chat API with reasoning disabled for fast summaries and the editing stage. The AI
 workspace keeps **Transcription** and **Summary** as independent modules, and each can select local or
 online execution. Online summary presets are available for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok,
 Qwen, and Gemini; the endpoint and model remain editable for compatible regional or custom endpoints.

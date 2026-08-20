@@ -130,6 +130,7 @@ export interface AISettingsSummary {
 
 export type AISummaryExecutionTarget = 'local' | 'online';
 export type AISummaryMode = 'fast' | 'deep';
+export type AISummaryLanguage = 'auto' | 'zh-CN' | 'en';
 
 export interface OnlineAISettingsSummary {
   version: 1;
@@ -193,6 +194,8 @@ export interface AISummaryPreparation {
   sourceCharacters: number;
   estimatedInputTokens: number;
   mode: AISummaryMode;
+  requestedOutputLanguage: AISummaryLanguage;
+  outputLanguage: Exclude<AISummaryLanguage, 'auto'>;
   contextWindow: number;
   reservedOutputTokens: number;
   analysisOutputTokens: number;
@@ -224,6 +227,7 @@ export interface AIPendingSummaryChange {
   targetPath: string;
   sourcePath: string;
   template: AISummaryTemplate;
+  outputLanguage: Exclude<AISummaryLanguage, 'auto'>;
   content: string;
   diff: string;
   citations: AIChangeCitationSummary[];
@@ -299,6 +303,7 @@ export interface OldfolioDesktopApi {
     path: string,
     executionTarget: AISummaryExecutionTarget,
     mode: AISummaryMode,
+    outputLanguage: AISummaryLanguage,
   ): Promise<AISummaryPreparation>;
   generateAISummary(input: {
     path: string;
@@ -306,6 +311,7 @@ export interface OldfolioDesktopApi {
     template: AISummaryTemplate;
     executionTarget: AISummaryExecutionTarget;
     mode: AISummaryMode;
+    outputLanguage: AISummaryLanguage;
   }): Promise<AIPendingSummaryChange>;
   applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
   undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;

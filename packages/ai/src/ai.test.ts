@@ -372,7 +372,7 @@ describe('AI security boundaries', () => {
         expect(request.messages[0]?.content).toContain('untrusted data');
         expect(request.messages.at(-1)?.content).toContain('segment-00001');
         expect(request.messages.map((message) => message.content).join('\n')).toContain(
-          'Every generated text field must use Simplified Chinese',
+          'complete output in natural Simplified Chinese',
         );
         expect(request.messages.map((message) => message.content).join('\n')).toContain(
           '安装教程：三个步骤',
@@ -388,6 +388,7 @@ describe('AI security boundaries', () => {
       providerId: 'test', endpoint: 'https://example.test', model: 'test-model',
     }, prepared);
     expect(generated.template).toBe('tutorial');
+    expect(generated.outputLanguage).toBe('zh-CN');
     expect(generated.summary).toEqual({
       title: '安装步骤摘要',
       markdown: '## 安装与验证\n\n安装前先备份配置，安装后检查版本。\n\n- 先保护现有配置\n- 再执行安装并确认结果',
