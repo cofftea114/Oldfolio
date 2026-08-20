@@ -353,15 +353,19 @@ export function App() {
     setAIBusy(true);
     setAIError('');
     try {
+      const requestedContextWindow = Number(aiContextWindow);
       const settings = await window.oldfolio.saveAISettings({
         providerId: aiProvider,
         endpoint: aiEndpoint,
         model: aiModel,
-        contextWindow: Number(aiContextWindow),
+        contextWindow: requestedContextWindow,
       });
       setAISettings(settings);
       setAIEndpoint(settings.endpoint);
-      setStatus('本地 AI 配置已保存到当前设备');
+      setAIContextWindow(String(settings.contextWindow));
+      setStatus(settings.contextWindow < requestedContextWindow
+        ? `本地 AI 配置已保存；上下文已按当前加载实例调整为 ${settings.contextWindow.toLocaleString()} tokens`
+        : '本地 AI 配置已保存到当前设备');
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法保存 AI 配置');
       setStatus('AI 配置保存失败');
@@ -1420,6 +1424,9 @@ export function App() {
               <div className="ai-review">
                 <div className="ai-risk"><span>{pendingSummary.riskLevel}</span> {pendingSummary.riskLevel === 'L1' ? '新建 AI 文件' : '更新 AI Wiki'}</div>
                 <p><strong>{pendingSummary.targetPath}</strong><br />Markdown 摘要 · {SUMMARY_LANGUAGE_LABELS[pendingSummary.outputLanguage]} · {pendingSummary.model}</p>
+                {pendingSummary.contextWindowAdjusted && (
+                  <p className="ai-hint">模型服务报告的实际上下文为 {pendingSummary.contextWindow.toLocaleString()} tokens；Oldfolio 已自动重新规划并更新本机配置。</p>
+                )}
                 <details>
                   <summary>审阅生成内容</summary>
                   <pre>{pendingSummary.content}</pre>

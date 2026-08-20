@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { AIProviderError } from '@oldfolio/ai';
 import type { AIProvider } from '@oldfolio/domain';
 import { compileTranscriptDocument } from '@oldfolio/media';
 import { parseOkfDocument } from '@oldfolio/okf';
@@ -78,7 +79,7 @@ describe('desktop AI summary workflow', () => {
     const requestedUrl = fetchMock.mock.calls[0]?.[0];
     expect(requestedUrl).toBeInstanceOf(URL);
     expect(requestedUrl instanceof URL ? requestedUrl.href : '').toBe('http://127.0.0.1:1234/api/v1/models');
-    await service.configure('openai-compatible', 'http://127.0.0.1:1234', 'google/gemma-4-e4b', 131_072);
+    await service.configure('openai-compatible', 'http://127.0.0.1:1234', 'google/gemma-4-e4b', 1_000_000);
     expect(await configStore.load()).toMatchObject({
       providerId: 'openai-compatible',
       endpoint: 'http://127.0.0.1:1234/api/v1/',
@@ -183,6 +184,79 @@ describe('desktop AI summary workflow', () => {
     const undone = await service.undo(applied.historyId);
     expect(undone.sourcePath).toBe(transcript.path);
     await expect(vault.read(applied.targetPath)).rejects.toBeInstanceOf(VaultNotFoundError);
+    vault.close();
+  });
+
+  it('replans once with the context window reported by a local model', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-ai-context-fallback-'));
+    roots.push(root);
+    const vault = await VaultRepository.open(join(root, 'vault'));
+    await vault.initialize();
+    const transcript = compileTranscriptDocument({
+      sourceId: 'source-context-fallback',
+      sourceHash: sha256('source-context-fallback'),
+      sourceResource: 'assets/media/context-fallback.mp4',
+      sourceTitle: '长文上下文回退测试',
+      transcript: {
+        text: '长文观点测试',
+        segments: Array.from({ length: 16 }, (_, index) => ({
+          startMs: index * 10_000,
+          endMs: index * 10_000 + 9_000,
+          text: `第 ${index + 1} 节：${'观点、原因、例子与结论。'.repeat(36)}`,
+        })),
+      },
+      generatedAt: '2026-08-21T00:00:00.000Z',
+      generator: 'test',
+    });
+    await vault.write(transcript.path, transcript.content, null);
+    const store = new AIDeviceConfigStore(join(root, 'device', 'ai.json'));
+    await store.save({
+      version: 1,
+      providerId: 'openai-compatible',
+      endpoint: 'http://127.0.0.1:1234/api/v1/',
+      model: 'local-model',
+      contextWindow: 32_768,
+    });
+    let callCount = 0;
+    const provider: AIProvider = {
+      id: 'openai-compatible',
+      displayName: 'Fake LM Studio',
+      capabilities: ['chat'],
+      listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        callCount += 1;
+        if (callCount === 1) {
+          throw new AIProviderError(
+            'request (16243 tokens) exceeds the available context size (8192 tokens)',
+            500,
+            'CONTEXT_WINDOW_EXCEEDED',
+            { requestTokens: 16_243, availableContextTokens: 8_192 },
+          );
+        }
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        return Promise.resolve({
+          content: prompt.includes('Read window')
+            ? '## 全局笔记\n\n保留当前窗口中新出现的观点，并与已有观点合并。'
+            : '# 长文摘要\n\n## 核心观点\n\n全文围绕观点、原因、例子与结论展开。',
+          model: 'local-model',
+          finishReason: 'stop',
+        });
+      },
+    };
+    const service = new AISummaryService(vault, store, provider);
+    const preparation = await service.prepare(transcript.path);
+    expect(preparation).toMatchObject({ contextWindow: 32_768, processingMode: 'direct' });
+
+    const preview = await service.generate(
+      transcript.path,
+      preparation.sourceRevision,
+      preparation.suggestedTemplate,
+    );
+
+    expect(callCount).toBeGreaterThan(2);
+    expect(preview).toMatchObject({ contextWindow: 8_192, contextWindowAdjusted: true });
+    expect(await store.load()).toMatchObject({ contextWindow: 8_192 });
+    expect(preview.content).toContain('# 长文摘要');
     vault.close();
   });
 

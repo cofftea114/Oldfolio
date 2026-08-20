@@ -62,6 +62,8 @@ claim that the planned 9–12 month v1 is complete.
   English. Explicit language versions use separate paths and stable IDs so translations coexist. Summary output
   is readable Markdown rather than schema-bound JSON. Preview the complete OKF `Synthesis` content and diff,
   and apply or undo the resulting L1/L2 change set.
+  LM Studio planning uses the smallest active loaded-instance context. A typed context-limit response can
+  trigger one bounded local replan using the engine-reported limit; unrelated provider failures are not retried.
 - Configure transcription and summary independently for local or online execution. Online summaries
   provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
   Gemini. Online transcription supports OpenAI-compatible audio models and Tencent Cloud

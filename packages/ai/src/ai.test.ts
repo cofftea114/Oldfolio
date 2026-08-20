@@ -51,10 +51,10 @@ describe('AI security boundaries', () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: {
         type: 'exceed_context_size_error',
-        message: 'request (17598 tokens) exceeds the available context size (8192 tokens)',
+        message: 'Engine protocol predict request returned 400: {"error":{"message":"request (17598 tokens) exceeds the available context size (8192 tokens)"}}',
       },
       privatePrompt: 'must-not-be-echoed',
-    }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    }), { status: 500, headers: { 'content-type': 'application/json' } }));
     const provider = new OpenAICompatibleProvider({
       endpointPolicy: { confirmedHosts: ['models.example.test'] },
       fetch: fetchMock,
@@ -65,6 +65,11 @@ describe('AI security boundaries', () => {
     }, { model: 'test', messages: [{ role: 'user', content: 'hello' }] });
 
     await expect(completion).rejects.toThrow(/17598 tokens.*8192 tokens/u);
+    await expect(completion).rejects.toMatchObject({
+      code: 'CONTEXT_WINDOW_EXCEEDED',
+      requestTokens: 17_598,
+      availableContextTokens: 8_192,
+    });
     await expect(completion).rejects.not.toThrow(/must-not-be-echoed/u);
   });
 

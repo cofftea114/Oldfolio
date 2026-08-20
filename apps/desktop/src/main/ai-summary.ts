@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { parse } from 'node:path';
 
 import {
+  AIProviderError,
   OllamaProvider,
   LMStudioProvider,
   SUMMARY_TEMPLATES,
@@ -73,6 +74,8 @@ export interface AIPendingSummaryChange {
   readonly sourcePath: string;
   readonly template: SummaryTemplate;
   readonly outputLanguage: Exclude<TranscriptSummaryLanguage, 'auto'>;
+  readonly contextWindow: number;
+  readonly contextWindowAdjusted: boolean;
   readonly content: string;
   readonly diff: string;
   readonly citations: readonly WikiCitation[];
@@ -190,10 +193,18 @@ export class AISummaryService {
     const normalized = normalizeLocalAIEndpoint(providerId, endpoint);
     if (!model.trim()) throw new Error('请选择一个本地聊天模型。');
     const models = await this.provider(providerId).listModels({ providerId, endpoint: normalized, model: '' });
-    if (!models.some((candidate) => candidate.id === model.trim())) throw new Error('所选模型不在本地服务返回的模型列表中。');
+    const selectedModel = models.find((candidate) => candidate.id === model.trim());
+    if (!selectedModel) throw new Error('所选模型不在本地服务返回的模型列表中。');
+    if (selectedModel.contextWindow !== undefined && selectedModel.contextWindow < 8_192) {
+      throw new Error(`当前加载模型的上下文只有 ${selectedModel.contextWindow.toLocaleString()} tokens，低于 Oldfolio 摘要所需的最低 8,192 tokens。请增大 Context Length 后重新加载模型。`);
+    }
+    const requestedContextWindow = normalizeAIContextWindow(contextWindow, DEFAULT_LOCAL_AI_CONTEXT_WINDOW);
+    const effectiveContextWindow = selectedModel.contextWindow === undefined
+      ? requestedContextWindow
+      : Math.min(requestedContextWindow, selectedModel.contextWindow);
     await this.configStore.save({
       version: 1, providerId, endpoint: normalized, model: model.trim(),
-      contextWindow: normalizeAIContextWindow(contextWindow, DEFAULT_LOCAL_AI_CONTEXT_WINDOW),
+      contextWindow: effectiveContextWindow,
     });
     return this.settings();
   }
@@ -206,7 +217,25 @@ export class AISummaryService {
   ): Promise<AISummaryPreparation> {
     if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget);
-    const { config } = execution;
+    let { config } = execution;
+    if (executionTarget === 'local' && config.providerId === 'openai-compatible') {
+      const models = await execution.provider.listModels(config, execution.context);
+      const selected = models.find((model) => model.id === config.model);
+      const configuredContextWindow = config.contextWindow ?? DEFAULT_LOCAL_AI_CONTEXT_WINDOW;
+      if (selected?.contextWindow !== undefined && selected.contextWindow < 8_192) {
+        throw new Error(`当前加载模型的上下文只有 ${selected.contextWindow.toLocaleString()} tokens，低于 Oldfolio 摘要所需的最低 8,192 tokens。请在 LM Studio 中增大 Context Length 后重新加载模型。`);
+      }
+      if (selected?.contextWindow !== undefined && selected.contextWindow < configuredContextWindow) {
+        config = { ...config, contextWindow: selected.contextWindow };
+        await this.configStore.save({
+          version: 1,
+          providerId: config.providerId as LocalAIProviderId,
+          endpoint: config.endpoint,
+          model: config.model,
+          contextWindow: selected.contextWindow,
+        });
+      }
+    }
     const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode, outputLanguage);
     return {
       sourcePath: prepared.sourcePath,
@@ -251,16 +280,59 @@ export class AISummaryService {
     if (mode === 'deep' && executionTarget !== 'online') throw new Error('深度摘要当前仅支持在线大模型。');
     const execution = await this.execution(executionTarget, signal);
     const { config } = execution;
-    const prepared = await this.readPrepared(sourcePath, config.contextWindow, mode, outputLanguage);
+    const initialContextWindow = config.contextWindow ?? DEFAULT_LOCAL_AI_CONTEXT_WINDOW;
+    let prepared = await this.readPrepared(sourcePath, config.contextWindow, mode, outputLanguage);
     if (prepared.sourceRevision !== sourceRevision) throw new Error('转录笔记已发生变化，请重新准备摘要。');
     await this.ensureWorkingDocument(prepared);
-    const generated = await generateTranscriptSummary(
-      execution.provider,
-      config,
-      prepared,
-      template,
-      execution.context,
-    );
+    let generated: Awaited<ReturnType<typeof generateTranscriptSummary>>;
+    try {
+      generated = await generateTranscriptSummary(
+        execution.provider,
+        config,
+        prepared,
+        template,
+        execution.context,
+      );
+    } catch (error: unknown) {
+      const configuredContextWindow = config.contextWindow ?? DEFAULT_LOCAL_AI_CONTEXT_WINDOW;
+      const reportedContextWindow = error instanceof AIProviderError
+        && error.code === 'CONTEXT_WINDOW_EXCEEDED'
+        ? error.availableContextTokens
+        : undefined;
+      if (
+        executionTarget !== 'local'
+        || reportedContextWindow === undefined
+        || reportedContextWindow < 8_192
+        || reportedContextWindow >= configuredContextWindow
+      ) throw error;
+
+      const fallbackPrepared = await this.readPrepared(
+        sourcePath,
+        reportedContextWindow,
+        mode,
+        outputLanguage,
+      );
+      if (fallbackPrepared.sourceRevision !== sourceRevision) {
+        throw new Error('转录笔记已发生变化，请重新准备摘要。');
+      }
+      await this.ensureWorkingDocument(fallbackPrepared);
+      const fallbackConfig = { ...config, contextWindow: reportedContextWindow };
+      generated = await generateTranscriptSummary(
+        execution.provider,
+        fallbackConfig,
+        fallbackPrepared,
+        template,
+        execution.context,
+      );
+      prepared = fallbackPrepared;
+      await this.configStore.save({
+        version: 1,
+        providerId: config.providerId as LocalAIProviderId,
+        endpoint: config.endpoint,
+        model: config.model,
+        contextWindow: reportedContextWindow,
+      });
+    }
     const targetPath = summaryPath(sourcePath, prepared.requestedOutputLanguage);
     const existing = await this.readOptional(targetPath);
     const logicalId = `synthesis-${sha256(`${sourcePath}:${prepared.requestedOutputLanguage}`).slice(0, 24)}`;
@@ -330,6 +402,8 @@ export class AISummaryService {
       sourcePath,
       template,
       outputLanguage: generated.outputLanguage,
+      contextWindow: prepared.contextWindow,
+      contextWindowAdjusted: prepared.contextWindow < initialContextWindow,
       content,
       diff,
       citations,

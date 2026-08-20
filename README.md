@@ -74,6 +74,9 @@ burned-in subtitles require a future OCR pipeline.
    `http://127.0.0.1:11434/api/` for Ollama and `http://127.0.0.1:1234/api/v1/` for LM Studio; entering
    only the loopback host and port is also accepted and normalized automatically.
 3. Select **Detect local models**, choose a chat model, and save the device configuration.
+   Oldfolio prefers the context length of the currently loaded LM Studio instance over the model's
+   theoretical maximum. If the engine later reports a smaller real limit, the summary is replanned
+   once with bounded document windows and the local setting is corrected after a successful retry.
 4. Open an Oldfolio-generated Transcript and select **Prepare summary**. Review the exact plain-text
    working document, destination, model, automatic template, estimated input size, and cost disclosure
    before sending it. Oldfolio writes a revision-bound plain-text working document under

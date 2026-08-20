@@ -37,15 +37,25 @@ export interface ProviderOptions {
   readonly defaultReasoningMode?: 'provider-default' | 'disabled' | 'enabled';
 }
 
+export interface AIProviderErrorOptions extends ErrorOptions {
+  readonly requestTokens?: number;
+  readonly availableContextTokens?: number;
+}
+
 export class AIProviderError extends Error {
+  readonly requestTokens: number | undefined;
+  readonly availableContextTokens: number | undefined;
+
   constructor(
     message: string,
     readonly status?: number,
     readonly code?: string,
-    options?: ErrorOptions,
+    options?: AIProviderErrorOptions,
   ) {
     super(message, options);
     this.name = 'AIProviderError';
+    this.requestTokens = options?.requestTokens;
+    this.availableContextTokens = options?.availableContextTokens;
   }
 }
 
@@ -102,6 +112,20 @@ async function readProviderErrorMessage(response: Response): Promise<string | un
   } catch {
     return undefined;
   }
+}
+
+function contextWindowErrorDetails(message: string | undefined): {
+  readonly requestTokens: number;
+  readonly availableContextTokens: number;
+} | undefined {
+  const match = message?.match(
+    /request\s*\((\d+)\s*tokens?\)\s*exceeds\s*the\s*available\s*context\s*size\s*\((\d+)\s*tokens?\)/iu,
+  );
+  if (!match) return undefined;
+  const requestTokens = Number(match[1]);
+  const availableContextTokens = Number(match[2]);
+  if (!Number.isSafeInteger(requestTokens) || !Number.isSafeInteger(availableContextTokens)) return undefined;
+  return { requestTokens, availableContextTokens };
 }
 
 abstract class HttpAIProvider implements AIProvider {
@@ -174,9 +198,12 @@ abstract class HttpAIProvider implements AIProvider {
     }
     if (!response.ok) {
       const detail = await readProviderErrorMessage(response);
+      const contextWindow = contextWindowErrorDetails(detail);
       throw new AIProviderError(
         `AI provider request failed with status ${response.status}${detail ? `: ${detail}` : '.'}`,
         response.status,
+        contextWindow ? 'CONTEXT_WINDOW_EXCEEDED' : undefined,
+        contextWindow,
       );
     }
     try {
@@ -452,10 +479,12 @@ export class LMStudioProvider extends HttpAIProvider {
       .filter((item): item is typeof item & { readonly type: 'llm'; readonly key: string } =>
         item.type === 'llm' && typeof item.key === 'string')
       .map((item) => {
-        const contextWindow = discoveredContextWindow(
-          item.loaded_instances?.[0]?.config?.context_length,
-          item.max_context_length,
-        );
+        const loadedContextWindows = (item.loaded_instances ?? [])
+          .map((instance) => discoveredContextWindow(instance.config?.context_length))
+          .filter((value): value is number => value !== undefined);
+        const contextWindow = loadedContextWindows.length > 0
+          ? Math.min(...loadedContextWindows)
+          : discoveredContextWindow(item.max_context_length);
         return {
           id: item.key,
           displayName: typeof item.display_name === 'string' ? item.display_name : item.key,

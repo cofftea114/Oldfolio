@@ -228,6 +228,8 @@ export interface AIPendingSummaryChange {
   sourcePath: string;
   template: AISummaryTemplate;
   outputLanguage: Exclude<AISummaryLanguage, 'auto'>;
+  contextWindow: number;
+  contextWindowAdjusted: boolean;
   content: string;
   diff: string;
   citations: AIChangeCitationSummary[];
