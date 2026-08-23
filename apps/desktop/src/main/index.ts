@@ -14,6 +14,7 @@ import { extractMarkdownMetadata, VaultNotFoundError, VaultRepository } from '@o
 import { SUMMARY_TEMPLATES } from '@oldfolio/ai';
 import { AIDeviceConfigStore } from './ai-device-config.js';
 import { AISummaryService, createLocalAIProviderResolver } from './ai-summary.js';
+import { AIWikiChatService } from './ai-wiki-chat.js';
 import { importCaptionFile } from './caption-import.js';
 import { DocumentLifecycleService } from './document-lifecycle.js';
 import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './cloud-transcription.js';
@@ -44,6 +45,7 @@ let mediaJobs: MediaJobStore | null = null;
 let mediaDeviceConfig: MediaDeviceConfigStore | null = null;
 let aiDeviceConfig: AIDeviceConfigStore | null = null;
 let aiSummary: AISummaryService | null = null;
+let aiWikiChat: AIWikiChatService | null = null;
 let documentLifecycle: DocumentLifecycleService | null = null;
 let onlineAI: OnlineAIService | null = null;
 let cloudTranscription: CloudTranscriptionService | null = null;
@@ -94,6 +96,11 @@ function requireAIDeviceConfig(): AIDeviceConfigStore {
 function requireAISummary(): AISummaryService {
   if (!aiSummary) throw new Error('请先打开一个 Vault');
   return aiSummary;
+}
+
+function requireAIWikiChat(): AIWikiChatService {
+  if (!aiWikiChat) throw new Error('请先打开一个 Vault');
+  return aiWikiChat;
 }
 
 function requireDocumentLifecycle(): DocumentLifecycleService {
@@ -180,6 +187,13 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   if (initialize) await repository.initialize();
   mediaJobs = new MediaJobStore(join(root, '.oldfolio/cache/media-jobs'));
   aiSummary = new AISummaryService(
+    repository,
+    requireAIDeviceConfig(),
+    localAIProvider,
+    () => new Date(),
+    requireOnlineAI(),
+  );
+  aiWikiChat = new AIWikiChatService(
     repository,
     requireAIDeviceConfig(),
     localAIProvider,
@@ -863,6 +877,43 @@ function registerIpc(): void {
     if (typeof historyId !== 'string') throw new TypeError('Invalid AI history id');
     return requireAISummary().undo(historyId);
   });
+  ipcMain.handle('ai:prepare-wiki-question', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid wiki question preparation');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.question !== 'string'
+      || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+    ) throw new TypeError('Invalid wiki question preparation');
+    return requireAIWikiChat().prepare(value.question, value.executionTarget);
+  });
+  ipcMain.handle('ai:answer-wiki-question', async (event, preparationId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof preparationId !== 'string') throw new TypeError('Invalid wiki question preparation id');
+    const controller = new AbortController();
+    activeAITasks.add(controller);
+    try {
+      return await requireAIWikiChat().answer(preparationId, controller.signal);
+    } finally {
+      activeAITasks.delete(controller);
+    }
+  });
+  ipcMain.handle('ai:prepare-save-wiki-answer', async (event, answerId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof answerId !== 'string') throw new TypeError('Invalid wiki answer id');
+    return requireAIWikiChat().prepareSave(answerId);
+  });
+  ipcMain.handle('ai:apply-wiki-answer', async (event, changeSetId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof changeSetId !== 'string') throw new TypeError('Invalid wiki answer change-set id');
+    const applied = await requireAIWikiChat().apply(changeSetId);
+    return { ...applied, document: await readDocument(applied.targetPath) };
+  });
+  ipcMain.handle('ai:undo-wiki-answer', async (event, historyId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof historyId !== 'string') throw new TypeError('Invalid wiki answer history id');
+    return requireAIWikiChat().undo(historyId);
+  });
 }
 
 function createWindow(): void {
@@ -890,7 +941,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;

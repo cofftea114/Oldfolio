@@ -45,6 +45,11 @@ const api: OldfolioDesktopApi = {
     { path, executionTarget },
   ),
   generateAIConcepts: (input) => ipcRenderer.invoke('ai:generate-concepts', input),
+  prepareWikiQuestion: (input) => ipcRenderer.invoke('ai:prepare-wiki-question', input),
+  answerWikiQuestion: (preparationId) => ipcRenderer.invoke('ai:answer-wiki-question', preparationId),
+  prepareSaveWikiAnswer: (answerId) => ipcRenderer.invoke('ai:prepare-save-wiki-answer', answerId),
+  applyWikiAnswerChangeSet: (changeSetId) => ipcRenderer.invoke('ai:apply-wiki-answer', changeSetId),
+  undoWikiAnswerChangeSet: (historyId) => ipcRenderer.invoke('ai:undo-wiki-answer', historyId),
   applyAIChangeSet: (changeSetId) => ipcRenderer.invoke('ai:apply-changeset', changeSetId),
   undoAIChangeSet: (historyId) => ipcRenderer.invoke('ai:undo-changeset', historyId),
 };

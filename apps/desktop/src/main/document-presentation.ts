@@ -5,6 +5,7 @@ const RAW_BUNDLE_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/r
 const TRANSCRIPT_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/wiki\/transcripts\//u;
 const SUMMARY_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/wiki\/summaries\//u;
 const CONCEPT_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/wiki\/concepts\//u;
+const QA_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/wiki\/qa\//u;
 const WIKI_DOCUMENT = /^bundles\/(?:personal|synthesis|creators\/[^/]+)\/wiki\//u;
 
 /** Maps physical Vault documents to the user-facing sidebar information architecture. */
@@ -13,6 +14,7 @@ export function classifyDocumentPath(path: string): DocumentCategory {
   if (TRANSCRIPT_DOCUMENT.test(path)) return 'transcript';
   if (SUMMARY_DOCUMENT.test(path)) return 'summary';
   if (CONCEPT_DOCUMENT.test(path)) return 'concept';
+  if (QA_DOCUMENT.test(path)) return 'qa';
   if (WIKI_DOCUMENT.test(path)) return 'knowledge';
   return 'note';
 }

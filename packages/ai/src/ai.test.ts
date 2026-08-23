@@ -13,6 +13,7 @@ import {
   parseConceptMarkdown,
   parseStructuredOutput,
   generateTranscriptSummary,
+  generateWikiAnswer,
   prepareTranscriptSummary,
   validateAIEndpoint,
 } from './index.js';
@@ -49,6 +50,37 @@ describe('Markdown-first concept extraction', () => {
     expect(concepts).toHaveLength(1);
     expect(concepts[0]?.title).toBe('知识蒸馏');
     expect(concepts[0]?.markdown).toContain('## 概念');
+  });
+});
+
+describe('Wiki-first question answering', () => {
+  it('keeps only known Wiki links and appends deterministic sources', async () => {
+    const provider: AIProvider = {
+      id: 'test', displayName: 'Test', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        expect(request.responseFormat).toBe('text');
+        expect(request.reasoningMode).toBe('disabled');
+        return Promise.resolve({
+          content: '本地文件是权威状态 [[bundles/personal/wiki/concepts/local-first.md|本地优先]]。伪造来源 [[unknown.md|未知页面]] 不应保留。',
+          model: 'test-model', finishReason: 'stop',
+        });
+      },
+    };
+    const result = await generateWikiAnswer(
+      provider,
+      { providerId: 'test', endpoint: 'http://127.0.0.1/', model: 'test-model', contextWindow: 8_192 },
+      '什么是本地优先？',
+      [{
+        path: 'bundles/personal/wiki/concepts/local-first.md',
+        title: '本地优先',
+        kind: 'wiki',
+        content: '# 本地优先\n\n数据首先保存在本地。',
+      }],
+    );
+    expect(result.markdown).toContain('[[bundles/personal/wiki/concepts/local-first.md|本地优先]]');
+    expect(result.markdown).not.toContain('[[unknown.md');
+    expect(result.markdown).toContain('未知页面');
+    expect(result.markdown).toContain('## 参考知识');
   });
 });
 

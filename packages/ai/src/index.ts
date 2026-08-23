@@ -8,3 +8,4 @@ export * from './provider.js';
 export * from './summary.js';
 export * from './structured-output.js';
 export * from './templates.js';
+export * from './wiki-qa.js';

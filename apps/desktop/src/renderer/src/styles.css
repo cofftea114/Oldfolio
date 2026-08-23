@@ -185,6 +185,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .property-list dt { color: var(--muted); }
 .property-list dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
 .backlink { width: 100%; border: 0; border-left: 2px solid #9aaa9f; padding: 7px 9px; background: #e7e9e3; text-align: left; cursor: pointer; font-size: 11px; }
+.wiki-chat-panel { margin: -2px -4px 20px; padding: 14px !important; border: 1px solid #d8d3c5 !important; border-radius: 10px; background: #f2eee4; }
+.wiki-chat-panel p { color: #665f50; font-size: 10px; line-height: 1.55; text-wrap: pretty; }
+.wiki-chat-panel textarea, .wiki-chat-panel select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fffefa;
+  color: var(--ink);
+  font-size: 10px;
+}
+.wiki-chat-panel textarea { min-height: 84px; padding: 9px; resize: vertical; line-height: 1.55; }
+.wiki-chat-panel select { margin-top: 5px; padding: 7px; }
+.wiki-chat-panel button { min-height: 40px; margin-top: 9px; border: 0; border-radius: 7px; padding: 8px 11px; background: var(--accent); color: white; cursor: pointer; font-size: 10px; }
+.wiki-chat-panel button.secondary { border: 1px solid #c9c8bf; background: transparent; color: var(--accent); }
+.wiki-chat-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.wiki-answer-meta { margin-bottom: 8px; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.wiki-answer-markdown { max-height: 340px; overflow: auto; border: 1px solid #d8d3c5; border-radius: 8px; background: #fffefa; }
+.wiki-answer-markdown .markdown-reader { min-height: auto; padding: 12px; overflow: visible; font: 11px/1.65 var(--font-editor); }
+.wiki-answer-markdown .markdown-reader h1 { margin-bottom: .8em; font-size: 1.35em; }
+.wiki-answer-markdown .markdown-reader h2 { margin-top: 1.3em; font-size: 1.12em; }
+.wiki-answer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .ai-panel { background: #e8ede9; margin: -2px -4px 0; padding: 14px !important; border: 1px solid #d5dfd8 !important; border-radius: 10px; }
 .ai-panel p { color: #57675e; font-size: 11px; line-height: 1.6; }
 .ai-panel button:disabled { opacity: .45; cursor: not-allowed; }

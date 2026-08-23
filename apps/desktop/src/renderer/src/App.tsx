@@ -27,7 +27,10 @@ import type {
   AIModelSummary,
   AIPendingSummaryChange,
   AIPendingConceptChange,
+  AIPendingWikiAnswerSave,
   AISettingsSummary,
+  AIWikiAnswer,
+  AIWikiQuestionPreparation,
   AISummaryExecutionTarget,
   AISummaryLanguage,
   AISummaryMode,
@@ -175,6 +178,12 @@ export function App() {
   const [pendingConcepts, setPendingConcepts] = useState<AIPendingConceptChange | null>(null);
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
   const [appliedChangeKind, setAppliedChangeKind] = useState<'summary' | 'concepts'>('summary');
+  const [wikiQuestion, setWikiQuestion] = useState('');
+  const [wikiChatError, setWikiChatError] = useState('');
+  const [wikiQuestionPreparation, setWikiQuestionPreparation] = useState<AIWikiQuestionPreparation | null>(null);
+  const [wikiAnswer, setWikiAnswer] = useState<AIWikiAnswer | null>(null);
+  const [pendingWikiAnswerSave, setPendingWikiAnswerSave] = useState<AIPendingWikiAnswerSave | null>(null);
+  const [appliedWikiAnswer, setAppliedWikiAnswer] = useState<AIAppliedChange | null>(null);
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
   const [seekRequest, setSeekRequest] = useState<{ startMs: number; requestId: number } | null>(null);
   const [newNoteOpen, setNewNoteOpen] = useState(false);
@@ -208,6 +217,18 @@ export function App() {
     setNewNoteTitle('');
     setDocumentError('');
     setDeletedDocuments([]);
+    setSummaryPreparation(null);
+    setPendingSummary(null);
+    setConceptPreparation(null);
+    setPendingConcepts(null);
+    setAppliedChange(null);
+    setWikiQuestion('');
+    setWikiQuestionPreparation(null);
+    setWikiAnswer(null);
+    setPendingWikiAnswerSave(null);
+    setAppliedWikiAnswer(null);
+    setAIError('');
+    setWikiChatError('');
     await loadDocuments();
   };
 
@@ -229,6 +250,7 @@ export function App() {
     setPendingConcepts(null);
     setAppliedChange(null);
     setAIError('');
+    setWikiChatError('');
   };
 
   const createDocument = async (event: FormEvent) => {
@@ -594,6 +616,98 @@ export function App() {
     }
   };
 
+  const prepareWikiQuestion = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!vault || !wikiQuestion.trim() || aiBusy) return;
+    setAIBusy(true);
+    setWikiChatError('');
+    setWikiAnswer(null);
+    setPendingWikiAnswerSave(null);
+    setAppliedWikiAnswer(null);
+    setStatus('正在检索本地知识库…');
+    try {
+      const preparation = await window.oldfolio.prepareWikiQuestion({
+        question: wikiQuestion,
+        executionTarget: aiExecutionTarget,
+      });
+      setWikiQuestionPreparation(preparation);
+      setStatus('请确认问答将读取的知识页面');
+    } catch (error: unknown) {
+      setWikiChatError(error instanceof Error ? error.message : '知识库检索失败');
+      setStatus('知识库检索失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const answerWikiQuestion = async () => {
+    if (!wikiQuestionPreparation || aiBusy) return;
+    setAIBusy(true);
+    setWikiChatError('');
+    setStatus('正在基于本地知识生成回答…');
+    try {
+      const answer = await window.oldfolio.answerWikiQuestion(wikiQuestionPreparation.id);
+      setWikiAnswer(answer);
+      setWikiQuestionPreparation(null);
+      setStatus('知识库回答已生成；尚未写入 Vault');
+    } catch (error: unknown) {
+      setWikiChatError(error instanceof Error ? error.message : '知识库问答失败');
+      setStatus('知识库问答失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const prepareSaveWikiAnswer = async () => {
+    if (!wikiAnswer || aiBusy) return;
+    setAIBusy(true);
+    setWikiChatError('');
+    try {
+      const pending = await window.oldfolio.prepareSaveWikiAnswer(wikiAnswer.id);
+      setPendingWikiAnswerSave(pending);
+      setStatus('问答保存变更集已生成，等待批准');
+    } catch (error: unknown) {
+      setWikiChatError(error instanceof Error ? error.message : '无法准备保存问答');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const applyWikiAnswerSave = async () => {
+    if (!pendingWikiAnswerSave || aiBusy) return;
+    setAIBusy(true);
+    setWikiChatError('');
+    try {
+      const applied = await window.oldfolio.applyWikiAnswerChangeSet(pendingWikiAnswerSave.id);
+      await loadDocuments();
+      await openDocument(applied.document.path);
+      setPendingWikiAnswerSave(null);
+      setAppliedWikiAnswer(applied);
+      setStatus('问答笔记已写入，可立即撤销');
+    } catch (error: unknown) {
+      setWikiChatError(error instanceof Error ? error.message : '无法保存问答笔记');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const undoWikiAnswerSave = async () => {
+    if (!appliedWikiAnswer || aiBusy) return;
+    setAIBusy(true);
+    setWikiChatError('');
+    try {
+      const undone = await window.oldfolio.undoWikiAnswerChangeSet(appliedWikiAnswer.historyId);
+      await loadDocuments();
+      if (undone.sourcePath) await openDocument(undone.sourcePath);
+      setAppliedWikiAnswer(null);
+      setStatus('问答笔记写入已撤销');
+    } catch (error: unknown) {
+      setWikiChatError(error instanceof Error ? error.message : '无法撤销问答笔记');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
   const importFeed = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!vault || !feedUrl.trim() || importing) return;
@@ -891,6 +1005,10 @@ export function App() {
   );
   const visibleSummaries = useMemo(
     () => visibleDocuments.filter((document) => document.category === 'summary'),
+    [visibleDocuments],
+  );
+  const visibleQA = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'qa'),
     [visibleDocuments],
   );
   const visibleTranscripts = useMemo(
@@ -1336,6 +1454,23 @@ export function App() {
             </nav>
           </details>
         )}
+        {visibleQA.length > 0 && (
+          <details className="file-section collapsible-file-section qa-section" open={query.trim() ? true : undefined}>
+            <summary className="section-label"><Bot size={14} /> 问答笔记 <span>{visibleQA.length}</span></summary>
+            <nav className="file-list" aria-label="知识库问答笔记">
+              {visibleQA.map((document) => (
+                <button
+                  className={active?.path === document.path ? 'file-item active' : 'file-item'}
+                  key={document.path}
+                  onClick={() => void openDocument(document.path)}
+                >
+                  <Bot size={15} />
+                  <span><strong>{document.title}</strong><small>{document.excerpt ?? '基于本地知识库回答'}</small></span>
+                </button>
+              ))}
+            </nav>
+          </details>
+        )}
         {visibleTranscripts.length > 0 && (
           <details className="file-section collapsible-file-section transcript-section" open={query.trim() ? true : undefined}>
             <summary className="section-label"><Captions size={14} /> 媒体转录 <span>{visibleTranscripts.length}</span></summary>
@@ -1426,6 +1561,94 @@ export function App() {
             {backlinks.length ? backlinks.map((item) => (
               <button className="backlink" key={item.path} onClick={() => void openDocument(item.path)}>{item.title}</button>
             )) : <p className="muted">当前笔记还没有反向链接。</p>}
+          </section>
+          <section className="wiki-chat-panel">
+            <div className="section-label"><Bot size={14} /> 问知识库</div>
+            {!wikiQuestionPreparation && !wikiAnswer && !pendingWikiAnswerSave && !appliedWikiAnswer && (
+              <form onSubmit={(event) => void prepareWikiQuestion(event)}>
+                <p>优先查询维护后的 Wiki；内容不足时才补充原始转录。生成回答不会自动写入 Vault。</p>
+                <textarea
+                  aria-label="知识库问题"
+                  disabled={!vault || aiBusy}
+                  maxLength={1000}
+                  onChange={(event) => setWikiQuestion(event.target.value)}
+                  placeholder="例如：这个知识库对理想主义与现实主义的关系有哪些判断？"
+                  rows={4}
+                  value={wikiQuestion}
+                />
+                <label className="field-label">回答模型
+                  <select disabled={aiBusy} value={aiExecutionTarget} onChange={(event) => setAIExecutionTarget(event.target.value as AISummaryExecutionTarget)}>
+                    <option value="local">本机模型</option>
+                    <option value="online">在线 OpenAI-compatible</option>
+                  </select>
+                </label>
+                <button disabled={!vault || !wikiQuestion.trim() || aiBusy} type="submit">
+                  {aiBusy ? '检索中…' : '检索相关知识'}
+                </button>
+              </form>
+            )}
+            {wikiQuestionPreparation && (
+              <div className="ai-review">
+                <dl>
+                  <div><dt>问题</dt><dd>{wikiQuestionPreparation.question}</dd></div>
+                  <div><dt>模型</dt><dd>{wikiQuestionPreparation.model}</dd></div>
+                  <div><dt>知识页面</dt><dd>{wikiQuestionPreparation.sources.length} 个</dd></div>
+                  <div><dt>转录回查</dt><dd>{wikiQuestionPreparation.usedTranscriptFallback ? '已启用' : '未使用'}</dd></div>
+                  <div><dt>预计费用</dt><dd>{wikiQuestionPreparation.estimatedCost === 0 ? '¥0（本地）' : '由在线服务商计费'}</dd></div>
+                </dl>
+                {wikiQuestionPreparation.sources.map((source) => (
+                  <details key={source.path}>
+                    <summary>{source.kind === 'wiki' ? 'Wiki' : '转录'} · {source.title}</summary>
+                    <small>{source.path}</small>
+                    <pre>{source.preview}</pre>
+                  </details>
+                ))}
+                {wikiQuestionPreparation.executionTarget === 'online' && (
+                  <p className="ai-hint">确认后，上述内容会由你的设备直接发送到 {endpointHost(wikiQuestionPreparation.endpoint)}。</p>
+                )}
+                <button disabled={aiBusy} onClick={() => void answerWikiQuestion()}>
+                  {aiBusy ? '回答中…' : wikiQuestionPreparation.executionTarget === 'online' ? '确认并发送到在线模型' : '确认并发送到本机模型'}
+                </button>
+              </div>
+            )}
+            {wikiAnswer && !pendingWikiAnswerSave && !appliedWikiAnswer && (
+              <div className="wiki-answer-result">
+                <div className="wiki-answer-meta">L0 · 只读回答 · {wikiAnswer.model}</div>
+                <div className="wiki-answer-markdown">
+                  <MarkdownReader value={wikiAnswer.markdown} onOpenDocument={openWikiLink} onSeek={seekFromNote} />
+                </div>
+                <div className="wiki-answer-actions">
+                  <button disabled={aiBusy} onClick={() => void prepareSaveWikiAnswer()}>保存到知识库</button>
+                  <button className="secondary" disabled={aiBusy} onClick={() => {
+                    setWikiAnswer(null);
+                    setWikiQuestion('');
+                  }}>继续提问</button>
+                </div>
+              </div>
+            )}
+            {pendingWikiAnswerSave && (
+              <div className="ai-review">
+                <div className="ai-risk"><span>{pendingWikiAnswerSave.riskLevel}</span> {pendingWikiAnswerSave.riskLevel === 'L1' ? '新建问答笔记' : '更新同一问题的问答'}</div>
+                <p><strong>{pendingWikiAnswerSave.targetPath}</strong></p>
+                <details>
+                  <summary>审阅问答笔记</summary>
+                  <pre>{pendingWikiAnswerSave.content}</pre>
+                </details>
+                <details>
+                  <summary>审阅逐行 diff</summary>
+                  <pre>{pendingWikiAnswerSave.diff}</pre>
+                </details>
+                <button disabled={aiBusy} onClick={() => void applyWikiAnswerSave()}>{aiBusy ? '应用中…' : '批准并写入 Vault'}</button>
+              </div>
+            )}
+            {appliedWikiAnswer && (
+              <div className="ai-applied">
+                <CheckCircle2 size={16} />
+                <p>问答笔记已写入 <strong>{appliedWikiAnswer.targetPath}</strong></p>
+                <button disabled={aiBusy} onClick={() => void undoWikiAnswerSave()}><RotateCcw size={13} /> 撤销本次写入</button>
+              </div>
+            )}
+            {wikiChatError && <p className="ai-error" role="alert">{wikiChatError}</p>}
           </section>
           <section className="ai-panel">
             <div className="section-label"><Sparkles size={14} /> AI 变更集</div>

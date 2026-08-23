@@ -4,7 +4,7 @@ export interface VaultSummary {
   documentCount: number;
 }
 
-export type DocumentCategory = 'note' | 'knowledge' | 'summary' | 'concept' | 'transcript' | 'internal';
+export type DocumentCategory = 'note' | 'knowledge' | 'summary' | 'concept' | 'qa' | 'transcript' | 'internal';
 
 export interface DocumentSummary {
   path: string;
@@ -266,6 +266,42 @@ export interface AIPendingConceptChange {
   usage?: { inputTokens?: number; outputTokens?: number };
 }
 
+export interface AIWikiQuestionPreparation {
+  id: string;
+  question: string;
+  executionTarget: AISummaryExecutionTarget;
+  endpoint: string;
+  model: string;
+  providerId: AILocalProviderId;
+  estimatedCost: 0 | null;
+  usedTranscriptFallback: boolean;
+  sources: {
+    path: string;
+    title: string;
+    kind: 'wiki' | 'transcript';
+    revision: string;
+    preview: string;
+  }[];
+}
+
+export interface AIWikiAnswer {
+  id: string;
+  question: string;
+  markdown: string;
+  model: string;
+  sourcePaths: string[];
+  usedTranscriptFallback: boolean;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export interface AIPendingWikiAnswerSave {
+  id: string;
+  riskLevel: 'L1' | 'L2';
+  targetPath: string;
+  content: string;
+  diff: string;
+}
+
 export interface AIAppliedChange {
   historyId: string;
   targetPath: string;
@@ -350,6 +386,14 @@ export interface OldfolioDesktopApi {
     sourceRevision: string;
     executionTarget: AISummaryExecutionTarget;
   }): Promise<AIPendingConceptChange>;
+  prepareWikiQuestion(input: {
+    question: string;
+    executionTarget: AISummaryExecutionTarget;
+  }): Promise<AIWikiQuestionPreparation>;
+  answerWikiQuestion(preparationId: string): Promise<AIWikiAnswer>;
+  prepareSaveWikiAnswer(answerId: string): Promise<AIPendingWikiAnswerSave>;
+  applyWikiAnswerChangeSet(changeSetId: string): Promise<AIAppliedChange>;
+  undoWikiAnswerChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;
   applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
   undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;
 }

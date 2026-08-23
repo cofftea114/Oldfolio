@@ -64,6 +64,14 @@ claim that the planned 9–12 month v1 is complete.
   and apply or undo the resulting L1/L2 change set.
   LM Studio planning uses the smallest active loaded-instance context. A typed context-limit response can
   trigger one bounded local replan using the engine-reported limit; unrelated provider failures are not retried.
+- Extract reusable, theme-first OKF `Concept` pages from generated summaries without requiring strict JSON.
+  Existing normalized titles are updated in place with stable IDs; new concepts, the personal index, and the
+  maintenance log are written as one reviewable atomic change set. Personal notes, concepts, summaries,
+  saved Q&A, and transcripts are presented in separate sidebar groups.
+- Ask questions against the local knowledge base with maintained Wiki pages ranked ahead of source transcripts.
+  The exact retrieved payload is disclosed before local or online inference, unknown model-authored Wiki links
+  are removed, and a deterministic reference list is appended locally. Answers remain L0 and in memory unless
+  the user explicitly approves an L1/L2 OKF Q&A change set; saved answers update the bundle index and log.
 - Configure transcription and summary independently for local or online execution. Online summaries
   provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
   Gemini. Online transcription supports OpenAI-compatible audio models and Tencent Cloud
@@ -100,9 +108,9 @@ claim that the planned 9–12 month v1 is complete.
 - Production WebDAV transport and folder-sync conflict UI.
 - OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
   integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
-- Processing transcripts above the current 200,000-character safety limit, AI chat, and reusable concept
-  extraction across multiple transcripts.
+- Processing transcripts above the current 200,000-character safety limit, multi-turn conversational memory,
+  and one-click batch concept extraction across multiple transcripts.
 
-The next product increment should add reusable Concept extraction, then connect OS credential stores
-for persistent OpenAI-compatible BYOK without weakening the current
+The next product increment should connect OS credential stores for persistent OpenAI-compatible BYOK,
+without weakening the current
 payload-disclosure and no-secret-in-Vault boundaries.
