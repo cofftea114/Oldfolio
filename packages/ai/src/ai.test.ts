@@ -10,12 +10,47 @@ import {
   createPromptDataBoundary,
   createWikiChangeSet,
   estimateTextTokens,
+  parseConceptMarkdown,
   parseStructuredOutput,
   generateTranscriptSummary,
   prepareTranscriptSummary,
   validateAIEndpoint,
 } from './index.js';
 import type { AICompletionRequest, AIProvider } from '@oldfolio/domain';
+
+describe('Markdown-first concept extraction', () => {
+  it('repairs missing sections and ignores duplicate concept headings', () => {
+    const concepts = parseConceptMarkdown(`模型说明文字
+
+# 概念候选
+## 本地优先
+### 摘要
+数据首先保存在用户设备上。
+### 实体
+[[bundles/personal/wiki/summaries/a.md|来源摘要]]
+### 概念
+本地文件是权威状态。
+
+## 本地优先
+重复内容
+
+## 可逆变更
+变更应当可以撤销。`);
+
+    expect(concepts).toHaveLength(2);
+    expect(concepts[0]).toMatchObject({ title: '本地优先' });
+    expect(concepts[0]?.markdown).toContain('## 概述与综合\n\n暂无可确认内容。');
+    expect(concepts[1]?.markdown).toContain('# 可逆变更');
+    expect(concepts[1]?.markdown).toContain('## 摘要\n\n变更应当可以撤销。');
+  });
+
+  it('accepts a single H1 response without structured output', () => {
+    const concepts = parseConceptMarkdown('# 知识蒸馏\n\n把持续内容整理成可维护知识网络。');
+    expect(concepts).toHaveLength(1);
+    expect(concepts[0]?.title).toBe('知识蒸馏');
+    expect(concepts[0]?.markdown).toContain('## 概念');
+  });
+});
 
 describe('AI security boundaries', () => {
   it('never serializes an invocation secret or retains it on the provider', async () => {

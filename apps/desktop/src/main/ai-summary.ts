@@ -7,6 +7,7 @@ import {
   LMStudioProvider,
   SUMMARY_TEMPLATES,
   createWikiChangeSet,
+  generateConceptsFromSummary,
   generateTranscriptSummary,
   prepareTranscriptSummary,
   type PreparedTranscriptSummary,
@@ -23,7 +24,7 @@ import type {
   WikiCitation,
 } from '@oldfolio/domain';
 import { parseTranscriptPlaybackManifest } from '@oldfolio/media';
-import { serializeNewOkfConcept } from '@oldfolio/okf';
+import { parseOkfDocument, serializeNewOkfConcept, type ParsedOkfConcept } from '@oldfolio/okf';
 import {
   VaultNotFoundError,
   type AppliedChangeSet,
@@ -79,6 +80,35 @@ export interface AIPendingSummaryChange {
   readonly content: string;
   readonly diff: string;
   readonly citations: readonly WikiCitation[];
+  readonly model: string;
+  readonly usage?: { readonly inputTokens?: number; readonly outputTokens?: number };
+}
+
+export interface AIConceptPreparation {
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly sourceTitle: string;
+  readonly existingConceptCount: number;
+  readonly sourceCharacters: number;
+  readonly endpoint: string;
+  readonly model: string;
+  readonly providerId: LocalAIProviderId;
+  readonly executionTarget: AISummaryExecutionTarget;
+  readonly dataDestination: AISummaryPreparation['dataDestination'];
+  readonly estimatedCost: 0 | null;
+  readonly sourcePreview: string;
+}
+
+export interface AIPendingConceptChange {
+  readonly id: string;
+  readonly riskLevel: 'L1' | 'L2';
+  readonly targetPath: string;
+  readonly sourcePath: string;
+  readonly createdCount: number;
+  readonly updatedCount: number;
+  readonly conceptTitles: readonly string[];
+  readonly files: readonly { readonly path: string; readonly action: 'create' | 'update'; readonly content: string }[];
+  readonly diff: string;
   readonly model: string;
   readonly usage?: { readonly inputTokens?: number; readonly outputTokens?: number };
 }
@@ -148,6 +178,42 @@ function replacementDiff(path: string, previous: string | null, content: string)
   const removed = previous === null ? [] : previous.split('\n').map((line) => `-${line}`);
   const added = content.split('\n').map((line) => `+${line}`);
   return [`--- ${previous === null ? '/dev/null' : path}`, `+++ ${path}`, ...removed, ...added].join('\n');
+}
+
+function conceptKey(value: string): string {
+  return value.normalize('NFC').toLocaleLowerCase('zh-CN').replaceAll(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function conceptPath(title: string): string {
+  const printable = [...title.normalize('NFC')]
+    .map((character) => (character.codePointAt(0) ?? 0) < 32 ? '-' : character)
+    .join('');
+  const stem = printable.replaceAll(/[<>:"/\\|?*]/gu, '-').replaceAll(/\s+/gu, '-').replaceAll(/-+/gu, '-').slice(0, 48).replaceAll(/^[.-]+|[. -]+$/gu, '') || '未命名概念';
+  return `bundles/personal/wiki/concepts/知识点-${stem}.md`;
+}
+
+function appendIndexLinks(content: string, concepts: readonly { readonly title: string; readonly path: string }[]): string {
+  const additions = concepts.filter((concept) => !content.includes(`[[${concept.path}`));
+  if (additions.length === 0) return content;
+  const lines = additions.map((concept) => `- [[${concept.path}|${concept.title}]]`).join('\n');
+  const heading = /^## 概念\s*$/mu;
+  if (!heading.test(content)) return `${content.trimEnd()}\n\n## 概念\n\n${lines}\n`;
+  const match = heading.exec(content);
+  const insertAt = (match?.index ?? 0) + (match?.[0].length ?? 0);
+  return `${content.slice(0, insertAt)}\n\n${lines}${content.slice(insertAt)}`;
+}
+
+function prependLog(content: string, date: string, concepts: readonly { readonly title: string; readonly action: 'create' | 'update' }[]): string {
+  const lines = concepts.map((concept) => `- ${concept.action === 'create' ? '创建' : '更新'}概念：${concept.title}`).join('\n');
+  const dateHeading = `## ${date}`;
+  const index = content.indexOf(dateHeading);
+  if (index >= 0) {
+    const insertAt = index + dateHeading.length;
+    return `${content.slice(0, insertAt)}\n\n${lines}${content.slice(insertAt)}`;
+  }
+  const titleMatch = /^#\s+.+$/mu.exec(content);
+  const insertAt = titleMatch?.index === undefined ? 0 : titleMatch.index + titleMatch[0].length;
+  return `${content.slice(0, insertAt)}\n\n${dateHeading}\n\n${lines}\n${content.slice(insertAt).replace(/^\s*/u, '')}`;
 }
 
 export class AISummaryService {
@@ -412,6 +478,173 @@ export class AISummaryService {
     };
   }
 
+  async prepareConcepts(
+    sourcePath: string,
+    executionTarget: AISummaryExecutionTarget = 'local',
+  ): Promise<AIConceptPreparation> {
+    const source = await this.readSummarySource(sourcePath);
+    const execution = await this.execution(executionTarget);
+    const existing = await this.existingConcepts();
+    return {
+      sourcePath: source.snapshot.path,
+      sourceRevision: source.snapshot.revision,
+      sourceTitle: source.title,
+      existingConceptCount: existing.length,
+      sourceCharacters: source.parsed.body.length,
+      endpoint: execution.config.endpoint,
+      model: execution.config.model,
+      providerId: execution.config.providerId as LocalAIProviderId,
+      executionTarget,
+      dataDestination: execution.dataDestination,
+      estimatedCost: executionTarget === 'local' ? 0 : null,
+      sourcePreview: source.parsed.body.trim(),
+    };
+  }
+
+  async generateConcepts(
+    sourcePath: string,
+    sourceRevision: string,
+    signal?: AbortSignal,
+    executionTarget: AISummaryExecutionTarget = 'local',
+  ): Promise<AIPendingConceptChange> {
+    const source = await this.readSummarySource(sourcePath);
+    if (source.snapshot.revision !== sourceRevision) throw new Error('摘要笔记已发生变化，请重新准备概念提取。');
+    const existingConcepts = await this.existingConcepts();
+    const execution = await this.execution(executionTarget, signal);
+    const generated = await generateConceptsFromSummary(execution.provider, execution.config, {
+      sourcePath,
+      sourceTitle: source.title,
+      sourceMarkdown: source.snapshot.text,
+      existingConcepts: existingConcepts.map((concept) => ({
+        title: concept.title,
+        path: concept.snapshot.path,
+        excerpt: concept.parsed.body.slice(0, 1_500),
+      })),
+    }, execution.context);
+
+    const existingByTitle = new Map(existingConcepts.map((concept) => [conceptKey(concept.title), concept]));
+    const generatedAt = this.now().toISOString();
+    const conceptChanges: {
+      readonly title: string;
+      readonly path: string;
+      readonly action: 'create' | 'update';
+      readonly snapshot: VaultFileSnapshot | null;
+      readonly content: string;
+    }[] = [];
+    const generatedKeys = new Set<string>();
+    for (const concept of generated.concepts) {
+      const key = conceptKey(concept.title);
+      if (!key || generatedKeys.has(key)) continue;
+      generatedKeys.add(key);
+      const existing = existingByTitle.get(key);
+      const path = existing?.snapshot.path ?? conceptPath(concept.title);
+      const existingSources = existing?.parsed.frontmatter?.sources ?? [];
+      const sources = [
+        ...existingSources,
+        ...existingSources.some((item) => item.resource === sourcePath)
+          ? []
+          : [{ resource: sourcePath, id: `synthesis-${sha256(sourcePath).slice(0, 24)}`, title: source.title }],
+      ];
+      const stableId = existing?.parsed.frontmatter?.oldfolio?.id
+        ?? `concept-${sha256(key).slice(0, 24)}`;
+      const content = serializeNewOkfConcept({
+        frontmatter: {
+          ...(existing?.parsed.frontmatter ?? {}),
+          type: 'Concept',
+          title: concept.title,
+          description: `可复用知识概念：${concept.title}`,
+          sources,
+          status: 'draft',
+          generated: { by: `${execution.config.providerId}:${generated.completion.model}`, at: generatedAt },
+          oldfolio: {
+            ...(existing?.parsed.frontmatter?.oldfolio ?? {}),
+            id: stableId,
+            prompt_version: generated.promptVersion,
+            last_source_path: sourcePath,
+            last_source_revision: sourceRevision,
+          },
+        },
+        body: concept.markdown,
+      });
+      conceptChanges.push({
+        title: concept.title,
+        path,
+        action: existing ? 'update' : 'create',
+        snapshot: existing?.snapshot ?? null,
+        content,
+      });
+    }
+    if (conceptChanges.length === 0) throw new Error('模型没有提取出可写入的知识概念。');
+
+    const indexSnapshot = await this.repository.read('bundles/personal/index.md');
+    const logSnapshot = await this.repository.read('bundles/personal/log.md');
+    const indexContent = appendIndexLinks(indexSnapshot.text, conceptChanges);
+    const logContent = prependLog(logSnapshot.text, generatedAt.slice(0, 10), conceptChanges);
+    const managedChanges = [
+      ...conceptChanges,
+      { title: '个人知识目录', path: indexSnapshot.path, action: 'update' as const, snapshot: indexSnapshot, content: indexContent },
+      { title: '知识包变更日志', path: logSnapshot.path, action: 'update' as const, snapshot: logSnapshot, content: logContent },
+    ];
+    const hasConceptUpdate = conceptChanges.some((concept) => concept.action === 'update');
+    const riskLevel = hasConceptUpdate ? 'L2' as const : 'L1' as const;
+    const citationId = `source-${sha256(`${sourcePath}:${sourceRevision}`).slice(0, 16)}`;
+    const citations: WikiCitation[] = [{
+      id: citationId,
+      sourceId: source.parsed.frontmatter?.oldfolio?.id ?? `synthesis-${sha256(sourcePath).slice(0, 24)}`,
+      resource: sourcePath,
+      title: source.title,
+    }];
+    const items = managedChanges.map((change, index) => {
+      const itemRisk = change.action === 'update' && change.path.includes('/wiki/') ? 'L2' as const : 'L1' as const;
+      const operation = change.action === 'create'
+        ? { kind: 'create' as const, path: change.path, content: change.content, contentHash: sha256(change.content) }
+        : { kind: 'update' as const, path: change.path, baseRevision: revision(change.snapshot!), content: change.content, contentHash: sha256(change.content) };
+      return {
+        id: `concept-change-${index + 1}-${sha256(change.path).slice(0, 12)}`,
+        summary: `${change.action === 'create' ? '创建' : '更新'}${change.title}`,
+        riskLevel: itemRisk,
+        operation,
+        diff: replacementDiff(change.path, change.snapshot?.text ?? null, change.content),
+        citationIds: change.path.includes('/wiki/concepts/') ? [citationId] : [],
+      };
+    });
+    const baseRevisions = [
+      revision(source.snapshot),
+      revision(indexSnapshot),
+      revision(logSnapshot),
+      ...conceptChanges.flatMap((concept) => concept.snapshot ? [revision(concept.snapshot)] : []),
+    ];
+    const changeSet = await createWikiChangeSet({
+      baseRevisions,
+      sourceHashes: { [sourcePath]: sourceRevision },
+      generator: {
+        providerId: execution.config.providerId,
+        model: generated.completion.model,
+        promptVersion: generated.promptVersion,
+      },
+      riskLevel,
+      items,
+      citations,
+      createdAt: generatedAt,
+    });
+    const targetPath = conceptChanges[0]!.path;
+    this.pending.set(changeSet.id, { changeSet, targetPath, sourcePath });
+    while (this.pending.size > 10) this.pending.delete(this.pending.keys().next().value as string);
+    return {
+      id: changeSet.id,
+      riskLevel,
+      targetPath,
+      sourcePath,
+      createdCount: conceptChanges.filter((concept) => concept.action === 'create').length,
+      updatedCount: conceptChanges.filter((concept) => concept.action === 'update').length,
+      conceptTitles: conceptChanges.map((concept) => concept.title),
+      files: conceptChanges.map((concept) => ({ path: concept.path, action: concept.action, content: concept.content })),
+      diff: items.map((item) => item.diff).join('\n\n'),
+      model: generated.completion.model,
+      ...(generated.completion.usage ? { usage: generated.completion.usage } : {}),
+    };
+  }
+
   async apply(changeSetId: string): Promise<AppliedChangeSet & { readonly targetPath: string }> {
     const pending = this.pending.get(changeSetId);
     if (!pending) throw new Error('AI 变更集不存在或已过期，请重新生成。');
@@ -448,6 +681,36 @@ export class AISummaryService {
       mode,
       outputLanguage,
       ...(contextWindow === undefined ? {} : { contextWindow }),
+    });
+  }
+
+  private async readSummarySource(sourcePath: string): Promise<{
+    readonly snapshot: VaultFileSnapshot;
+    readonly parsed: ParsedOkfConcept;
+    readonly title: string;
+  }> {
+    const snapshot = await this.repository.read(sourcePath);
+    if (!sourcePath.startsWith('bundles/personal/wiki/summaries/')) {
+      throw new Error('请选择由 Oldfolio 生成的摘要笔记。');
+    }
+    const parsed = parseOkfDocument(snapshot.text, sourcePath);
+    if (!parsed.valid || parsed.kind !== 'concept' || parsed.frontmatter?.type !== 'Synthesis') {
+      throw new Error('当前文档不是有效的 Oldfolio Synthesis 摘要。');
+    }
+    return { snapshot, parsed, title: parsed.frontmatter.title ?? parse(sourcePath).name };
+  }
+
+  private async existingConcepts(): Promise<readonly {
+    readonly snapshot: VaultFileSnapshot;
+    readonly parsed: ParsedOkfConcept;
+    readonly title: string;
+  }[]> {
+    const snapshots = await this.repository.scanDocuments();
+    return snapshots.flatMap((snapshot) => {
+      if (!snapshot.path.startsWith('bundles/personal/wiki/concepts/')) return [];
+      const parsed = parseOkfDocument(snapshot.text, snapshot.path);
+      if (!parsed.valid || parsed.kind !== 'concept' || parsed.frontmatter?.type !== 'Concept') return [];
+      return [{ snapshot, parsed, title: parsed.frontmatter.title ?? parse(snapshot.path).name }];
     });
   }
 

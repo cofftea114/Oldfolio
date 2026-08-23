@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { AIProviderError } from '@oldfolio/ai';
 import type { AIProvider } from '@oldfolio/domain';
 import { compileTranscriptDocument } from '@oldfolio/media';
-import { parseOkfDocument } from '@oldfolio/okf';
+import { parseOkfDocument, serializeNewOkfConcept } from '@oldfolio/okf';
 import { VaultNotFoundError, VaultRepository } from '@oldfolio/vault';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -282,6 +282,76 @@ describe('desktop AI summary workflow', () => {
     const current = await vault.read(transcript.path);
     await vault.write(transcript.path, `${current.text}\n`, current.revision);
     await expect(service.generate(transcript.path, preparation.sourceRevision, preparation.suggestedTemplate)).rejects.toThrow(/发生变化/);
+    vault.close();
+  });
+
+  it('creates reusable concepts, maintains the bundle index, and updates an existing title without changing its stable id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-ai-concepts-'));
+    roots.push(root);
+    const vault = await VaultRepository.open(join(root, 'vault'));
+    await vault.initialize();
+    const summaryPath = 'bundles/personal/wiki/summaries/local-first.md';
+    const summary = serializeNewOkfConcept({
+      frontmatter: {
+        type: 'Synthesis', title: '本地优先知识软件', status: 'draft',
+        oldfolio: { id: 'synthesis-local-first' },
+      },
+      body: '# 本地优先知识软件\n\n本地文件是权威状态，AI 只能通过可审批、可撤销的变更集维护知识。',
+    });
+    await vault.write(summaryPath, summary, null);
+    const store = new AIDeviceConfigStore(join(root, 'ai.json'));
+    await store.save({ version: 1, providerId: 'ollama', endpoint: 'http://127.0.0.1:11434/api/', model: 'test' });
+    let generation = 0;
+    const provider: AIProvider = {
+      id: 'ollama', displayName: 'Fake', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        generation += 1;
+        expect(request.responseFormat).toBe('text');
+        expect(request.reasoningMode).toBe('disabled');
+        return Promise.resolve({
+          content: `# 概念候选
+## 本地优先
+### 摘要
+数据和知识文件首先保存在用户设备上。
+### 实体
+[[${summaryPath}|本地优先知识软件]]
+### 概念
+本地文件是可直接读取和迁移的权威状态。
+### 对比
+区别于必须依赖厂商服务器的云端优先工具。
+### 概述与综合
+${generation === 1 ? '离线仍可工作。' : '离线可工作，并通过显式同步扩展到多端。'}`,
+          model: 'test', finishReason: 'stop', usage: { inputTokens: 120, outputTokens: 80 },
+        });
+      },
+    };
+    const service = new AISummaryService(vault, store, provider, () => new Date('2026-08-21T12:00:00.000Z'));
+    const preparation = await service.prepareConcepts(summaryPath);
+    expect(preparation).toMatchObject({ sourceTitle: '本地优先知识软件', existingConceptCount: 0 });
+    const first = await service.generateConcepts(summaryPath, preparation.sourceRevision);
+    expect(first).toMatchObject({ riskLevel: 'L1', createdCount: 1, updatedCount: 0, conceptTitles: ['本地优先'] });
+    const firstApply = await service.apply(first.id);
+    const firstConcept = await vault.read(firstApply.targetPath);
+    const firstParsed = parseOkfDocument(firstConcept.text, firstConcept.path);
+    expect(firstParsed.valid).toBe(true);
+    expect(firstParsed.kind).toBe('concept');
+    if (firstParsed.kind !== 'concept') throw new Error('Expected concept document');
+    expect(firstParsed.frontmatter?.type).toBe('Concept');
+    const stableId = firstParsed.frontmatter?.oldfolio?.id;
+    expect(stableId).toMatch(/^concept-/u);
+    expect((await vault.read('bundles/personal/index.md')).text.match(/\|本地优先\]\]/gu)).toHaveLength(1);
+    expect((await vault.read('bundles/personal/log.md')).text).toContain('## 2026-08-21');
+
+    const secondPreparation = await service.prepareConcepts(summaryPath);
+    expect(secondPreparation.existingConceptCount).toBe(1);
+    const second = await service.generateConcepts(summaryPath, secondPreparation.sourceRevision);
+    expect(second).toMatchObject({ riskLevel: 'L2', createdCount: 0, updatedCount: 1 });
+    await service.apply(second.id);
+    const updated = parseOkfDocument((await vault.read(second.targetPath)).text, second.targetPath);
+    if (updated.kind !== 'concept') throw new Error('Expected updated concept document');
+    expect(updated.frontmatter?.oldfolio?.id).toBe(stableId);
+    expect(updated.body).toContain('显式同步扩展到多端');
+    expect((await vault.read('bundles/personal/index.md')).text.match(/\|本地优先\]\]/gu)).toHaveLength(1);
     vault.close();
   });
 });

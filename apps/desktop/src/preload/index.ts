@@ -40,6 +40,11 @@ const api: OldfolioDesktopApi = {
     { path, executionTarget, mode, outputLanguage },
   ),
   generateAISummary: (input) => ipcRenderer.invoke('ai:generate-summary', input),
+  prepareAIConcepts: (path, executionTarget) => ipcRenderer.invoke(
+    'ai:prepare-concepts',
+    { path, executionTarget },
+  ),
+  generateAIConcepts: (input) => ipcRenderer.invoke('ai:generate-concepts', input),
   applyAIChangeSet: (changeSetId) => ipcRenderer.invoke('ai:apply-changeset', changeSetId),
   undoAIChangeSet: (historyId) => ipcRenderer.invoke('ai:undo-changeset', historyId),
 };

@@ -22,9 +22,11 @@ import {
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type {
   AIAppliedChange,
+  AIConceptPreparation,
   AILocalProviderId,
   AIModelSummary,
   AIPendingSummaryChange,
+  AIPendingConceptChange,
   AISettingsSummary,
   AISummaryExecutionTarget,
   AISummaryLanguage,
@@ -169,7 +171,10 @@ export function App() {
   const [summaryMode, setSummaryMode] = useState<AISummaryMode>('fast');
   const [summaryLanguage, setSummaryLanguage] = useState<AISummaryLanguage>('auto');
   const [pendingSummary, setPendingSummary] = useState<AIPendingSummaryChange | null>(null);
+  const [conceptPreparation, setConceptPreparation] = useState<AIConceptPreparation | null>(null);
+  const [pendingConcepts, setPendingConcepts] = useState<AIPendingConceptChange | null>(null);
   const [appliedChange, setAppliedChange] = useState<AIAppliedChange | null>(null);
+  const [appliedChangeKind, setAppliedChangeKind] = useState<'summary' | 'concepts'>('summary');
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read');
   const [seekRequest, setSeekRequest] = useState<{ startMs: number; requestId: number } | null>(null);
   const [newNoteOpen, setNewNoteOpen] = useState(false);
@@ -182,6 +187,7 @@ export function App() {
     title: string;
   }[]>([]);
   const deletedDocument = deletedDocuments.at(-1) ?? null;
+  const isSummaryNote = active?.path.startsWith('bundles/personal/wiki/summaries/') === true;
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -219,6 +225,8 @@ export function App() {
     setViewMode(document.path.startsWith('bundles/') ? 'read' : 'edit');
     setSummaryPreparation(null);
     setPendingSummary(null);
+    setConceptPreparation(null);
+    setPendingConcepts(null);
     setAppliedChange(null);
     setAIError('');
   };
@@ -262,6 +270,8 @@ export function App() {
       setDraft(EMPTY_MESSAGE);
       setSummaryPreparation(null);
       setPendingSummary(null);
+      setConceptPreparation(null);
+      setPendingConcepts(null);
       setAppliedChange(null);
       await loadDocuments();
       if (query.trim()) setHits(await window.oldfolio.search(query.trim()));
@@ -504,17 +514,60 @@ export function App() {
     }
   };
 
+  const prepareAIConcepts = async () => {
+    if (!active || draft !== active.content) return;
+    setAIBusy(true);
+    setAIError('');
+    setPendingConcepts(null);
+    setAppliedChange(null);
+    setStatus('正在准备概念提取数据披露…');
+    try {
+      const preparation = await window.oldfolio.prepareAIConcepts(active.path, aiExecutionTarget);
+      setConceptPreparation(preparation);
+      setStatus('请确认发送摘要并提取可复用概念');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法准备概念提取');
+      setStatus('概念提取准备失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const generateAIConcepts = async () => {
+    if (!conceptPreparation) return;
+    setAIBusy(true);
+    setAIError('');
+    setStatus('正在提取并整理可复用概念…');
+    try {
+      const pending = await window.oldfolio.generateAIConcepts({
+        path: conceptPreparation.sourcePath,
+        sourceRevision: conceptPreparation.sourceRevision,
+        executionTarget: conceptPreparation.executionTarget,
+      });
+      setPendingConcepts(pending);
+      setStatus('概念变更集已生成，等待批准');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : 'AI 概念提取失败');
+      setStatus('AI 概念提取失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
   const applyAIChangeSet = async () => {
-    if (!pendingSummary) return;
+    const pending = pendingSummary ?? pendingConcepts;
+    if (!pending) return;
     setAIBusy(true);
     setAIError('');
     setStatus('正在原子应用 AI 变更集…');
     try {
-      const applied = await window.oldfolio.applyAIChangeSet(pendingSummary.id);
+      const applied = await window.oldfolio.applyAIChangeSet(pending.id);
+      const kind = pendingConcepts ? 'concepts' : 'summary';
       await loadDocuments();
       await openDocument(applied.document.path);
+      setAppliedChangeKind(kind);
       setAppliedChange(applied);
-      setStatus('AI 摘要已写入，可立即撤销');
+      setStatus(`${kind === 'concepts' ? '知识概念' : 'AI 摘要'}已写入，可立即撤销`);
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法应用 AI 变更集');
       setStatus('AI 变更集未写入');
@@ -828,8 +881,16 @@ export function App() {
         : documents,
     [documents, hits, query],
   );
-  const visibleKnowledgeDocuments = useMemo(
-    () => visibleDocuments.filter((document) => document.category === 'knowledge'),
+  const visibleNotes = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'note'),
+    [visibleDocuments],
+  );
+  const visibleConcepts = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'concept' || document.category === 'knowledge'),
+    [visibleDocuments],
+  );
+  const visibleSummaries = useMemo(
+    () => visibleDocuments.filter((document) => document.category === 'summary'),
     [visibleDocuments],
   );
   const visibleTranscripts = useMemo(
@@ -1201,7 +1262,7 @@ export function App() {
         )}
         <div className="file-section">
           <div className="file-section-heading">
-            <div className="section-label">笔记 <span>{visibleKnowledgeDocuments.length}</span></div>
+            <div className="section-label">我的笔记 <span>{visibleNotes.length}</span></div>
             <button
               aria-label="新建笔记"
               className="mini-icon-button"
@@ -1228,8 +1289,8 @@ export function App() {
             </form>
           )}
           {documentError && <p className="document-error" role="alert">{documentError}</p>}
-          <nav className="file-list" aria-label="知识笔记">
-            {visibleKnowledgeDocuments.map((document) => (
+          <nav className="file-list" aria-label="我的笔记">
+            {visibleNotes.map((document) => (
               <button
                 className={active?.path === document.path ? 'file-item active' : 'file-item'}
                 key={document.path}
@@ -1241,8 +1302,42 @@ export function App() {
             ))}
           </nav>
         </div>
+        {visibleConcepts.length > 0 && (
+          <details className="file-section collapsible-file-section concept-section" open={query.trim() ? true : undefined}>
+            <summary className="section-label"><Network size={14} /> 可复用概念 <span>{visibleConcepts.length}</span></summary>
+            <nav className="file-list" aria-label="可复用知识概念">
+              {visibleConcepts.map((document) => (
+                <button
+                  className={active?.path === document.path ? 'file-item active' : 'file-item'}
+                  key={document.path}
+                  onClick={() => void openDocument(document.path)}
+                >
+                  <Network size={15} />
+                  <span><strong>{document.title}</strong><small>{document.excerpt ?? '持续维护的知识主题'}</small></span>
+                </button>
+              ))}
+            </nav>
+          </details>
+        )}
+        {visibleSummaries.length > 0 && (
+          <details className="file-section collapsible-file-section summary-section" open={query.trim() ? true : undefined}>
+            <summary className="section-label"><Sparkles size={14} /> AI 摘要 <span>{visibleSummaries.length}</span></summary>
+            <nav className="file-list" aria-label="AI 摘要">
+              {visibleSummaries.map((document) => (
+                <button
+                  className={active?.path === document.path ? 'file-item active' : 'file-item'}
+                  key={document.path}
+                  onClick={() => void openDocument(document.path)}
+                >
+                  <Sparkles size={15} />
+                  <span><strong>{document.title}</strong><small>{document.excerpt ?? '从媒体转录生成'}</small></span>
+                </button>
+              ))}
+            </nav>
+          </details>
+        )}
         {visibleTranscripts.length > 0 && (
-          <details className="file-section transcript-section">
+          <details className="file-section collapsible-file-section transcript-section" open={query.trim() ? true : undefined}>
             <summary className="section-label"><Captions size={14} /> 媒体转录 <span>{visibleTranscripts.length}</span></summary>
             <nav className="file-list" aria-label="媒体转录">
               {visibleTranscripts.map((document) => (
@@ -1334,10 +1429,12 @@ export function App() {
           </section>
           <section className="ai-panel">
             <div className="section-label"><Sparkles size={14} /> AI 变更集</div>
-            {!summaryPreparation && !pendingSummary && !appliedChange && (
+            {!summaryPreparation && !pendingSummary && !conceptPreparation && !pendingConcepts && !appliedChange && (
               <>
-                <p>从 Transcript 归纳视频的核心观点和论证结构。AI 只创建待审阅变更集，不会静默覆盖笔记。</p>
-                <label className="field-label">摘要运行位置
+                <p>{isSummaryNote
+                  ? '从当前摘要提炼可跨来源复用的知识概念；同名主题会更新已有概念，而不是重复创建。'
+                  : '从 Transcript 归纳视频的核心观点和论证结构。AI 只创建待审阅变更集，不会静默覆盖笔记。'}</p>
+                <label className="field-label">{isSummaryNote ? '概念提取运行位置' : '摘要运行位置'}
                   <select disabled={aiBusy} value={aiExecutionTarget} onChange={(event) => {
                     const target = event.target.value as AISummaryExecutionTarget;
                     setAIExecutionTarget(target);
@@ -1347,13 +1444,13 @@ export function App() {
                     <option value="online">在线 OpenAI-compatible</option>
                   </select>
                 </label>
-                <label className="field-label">摘要模式
+                {!isSummaryNote && <label className="field-label">摘要模式
                   <select disabled={aiBusy} value={summaryMode} onChange={(event) => setSummaryMode(event.target.value as AISummaryMode)}>
                     <option value="fast">快速摘要 · 关闭思考 · 1 次调用</option>
                     <option disabled={aiExecutionTarget !== 'online'} value="deep">深度摘要 · 思考分析后整理 · 2 次调用</option>
                   </select>
-                </label>
-                <label className="field-label">输出语言
+                </label>}
+                {!isSummaryNote && <label className="field-label">输出语言
                   <select
                     disabled={aiBusy}
                     value={summaryLanguage}
@@ -1363,15 +1460,47 @@ export function App() {
                     <option value="zh-CN">简体中文</option>
                     <option value="en">English</option>
                   </select>
-                </label>
-                <small className="ai-hint">指定语言会创建独立版本，不会覆盖“自动”摘要或另一种语言的摘要。</small>
-                <small className="ai-hint">深度摘要第一阶段使用自然语言理解全文，第二阶段关闭思考并编辑润色；会增加一次模型调用和相应费用。</small>
-                <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
-                  {aiBusy ? '准备中…' : '准备摘要'}
-                </button>
-                {active && !playback && <small className="ai-hint">请选择由 Oldfolio 生成的 Transcript 笔记。</small>}
+                </label>}
+                {!isSummaryNote && <small className="ai-hint">指定语言会创建独立版本，不会覆盖“自动”摘要或另一种语言的摘要。</small>}
+                {!isSummaryNote && <small className="ai-hint">深度摘要第一阶段使用自然语言理解全文，第二阶段关闭思考并编辑润色；会增加一次模型调用和相应费用。</small>}
+                {isSummaryNote ? (
+                  <button disabled={aiBusy || draft !== active?.content} onClick={() => void prepareAIConcepts()}>
+                    {aiBusy ? '准备中…' : '提取可复用概念'}
+                  </button>
+                ) : (
+                  <button disabled={!active || !playback || aiBusy || draft !== active.content} onClick={() => void prepareAISummary()}>
+                    {aiBusy ? '准备中…' : '准备摘要'}
+                  </button>
+                )}
+                {active && !playback && !isSummaryNote && <small className="ai-hint">请选择由 Oldfolio 生成的 Transcript 笔记。</small>}
                 {active && draft !== active.content && <small className="ai-hint">等待当前修改保存后再分析。</small>}
               </>
+            )}
+            {conceptPreparation && !pendingConcepts && (
+              <div className="ai-review">
+                <dl>
+                  <div><dt>来源</dt><dd>{conceptPreparation.sourceTitle}</dd></div>
+                  <div><dt>目标</dt><dd>{conceptPreparation.executionTarget === 'online'
+                    ? `在线 ${endpointHost(conceptPreparation.endpoint)}`
+                    : `本机 ${LOCAL_AI_PROVIDER_LABELS[conceptPreparation.providerId]}`}</dd></div>
+                  <div><dt>模型</dt><dd>{conceptPreparation.model}</dd></div>
+                  <div><dt>已有概念</dt><dd>{conceptPreparation.existingConceptCount} 个（用于去重）</dd></div>
+                  <div><dt>摘要长度</dt><dd>{conceptPreparation.sourceCharacters.toLocaleString()} 字符</dd></div>
+                  <div><dt>预计费用</dt><dd>{conceptPreparation.estimatedCost === 0 ? '¥0（本地）' : '由在线服务商计费'}</dd></div>
+                </dl>
+                {conceptPreparation.executionTarget === 'online' && (
+                  <p className="ai-hint">确认后，当前摘要和已有概念的短摘要会直接发送到 {endpointHost(conceptPreparation.endpoint)}，用于避免创建近义重复页。</p>
+                )}
+                <details>
+                  <summary>查看模型将读取的摘要</summary>
+                  <pre>{conceptPreparation.sourcePreview}</pre>
+                </details>
+                <button disabled={aiBusy} onClick={() => void generateAIConcepts()}>
+                  {aiBusy ? '提取中…' : conceptPreparation.executionTarget === 'online'
+                    ? '确认并发送到在线模型'
+                    : '确认并发送到本机模型'}
+                </button>
+              </div>
             )}
             {summaryPreparation && !pendingSummary && (
               <div className="ai-review">
@@ -1440,10 +1569,29 @@ export function App() {
                 </button>
               </div>
             )}
+            {pendingConcepts && (
+              <div className="ai-review">
+                <div className="ai-risk"><span>{pendingConcepts.riskLevel}</span> {pendingConcepts.updatedCount > 0 ? '更新 AI Wiki' : '新建知识概念'}</div>
+                <p>提取 {pendingConcepts.conceptTitles.length} 个概念：新建 {pendingConcepts.createdCount}，更新 {pendingConcepts.updatedCount}<br />{pendingConcepts.conceptTitles.join('、')} · {pendingConcepts.model}</p>
+                {pendingConcepts.files.map((file) => (
+                  <details key={file.path}>
+                    <summary>{file.action === 'create' ? '新建' : '更新'} · {file.path}</summary>
+                    <pre>{file.content}</pre>
+                  </details>
+                ))}
+                <details>
+                  <summary>审阅全部逐行 diff（含目录与日志）</summary>
+                  <pre>{pendingConcepts.diff}</pre>
+                </details>
+                <button disabled={aiBusy} onClick={() => void applyAIChangeSet()}>
+                  {aiBusy ? '应用中…' : '批准并原子写入 Vault'}
+                </button>
+              </div>
+            )}
             {appliedChange && (
               <div className="ai-applied">
                 <CheckCircle2 size={16} />
-                <p>摘要已写入 <strong>{appliedChange.targetPath}</strong></p>
+                <p>{appliedChangeKind === 'concepts' ? '知识概念' : '摘要'}已写入 <strong>{appliedChange.targetPath}</strong></p>
                 <button disabled={aiBusy} onClick={() => void undoAIChangeSet()}><RotateCcw size={13} /> 撤销本次写入</button>
               </div>
             )}

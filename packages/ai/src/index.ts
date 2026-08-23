@@ -1,5 +1,6 @@
 export * from './changeset.js';
 export * from './cloud-transcription.js';
+export * from './concept.js';
 export * from './connectors.js';
 export * from './endpoint-policy.js';
 export * from './prompt-boundary.js';

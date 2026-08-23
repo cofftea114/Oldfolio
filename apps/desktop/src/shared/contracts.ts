@@ -4,7 +4,7 @@ export interface VaultSummary {
   documentCount: number;
 }
 
-export type DocumentCategory = 'knowledge' | 'transcript' | 'internal';
+export type DocumentCategory = 'note' | 'knowledge' | 'summary' | 'concept' | 'transcript' | 'internal';
 
 export interface DocumentSummary {
   path: string;
@@ -237,6 +237,35 @@ export interface AIPendingSummaryChange {
   usage?: { inputTokens?: number; outputTokens?: number };
 }
 
+export interface AIConceptPreparation {
+  sourcePath: string;
+  sourceRevision: string;
+  sourceTitle: string;
+  existingConceptCount: number;
+  sourceCharacters: number;
+  endpoint: string;
+  model: string;
+  providerId: AILocalProviderId;
+  executionTarget: AISummaryExecutionTarget;
+  dataDestination: AISummaryPreparation['dataDestination'];
+  estimatedCost: 0 | null;
+  sourcePreview: string;
+}
+
+export interface AIPendingConceptChange {
+  id: string;
+  riskLevel: 'L1' | 'L2';
+  targetPath: string;
+  sourcePath: string;
+  createdCount: number;
+  updatedCount: number;
+  conceptTitles: string[];
+  files: { path: string; action: 'create' | 'update'; content: string }[];
+  diff: string;
+  model: string;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
 export interface AIAppliedChange {
   historyId: string;
   targetPath: string;
@@ -315,6 +344,12 @@ export interface OldfolioDesktopApi {
     mode: AISummaryMode;
     outputLanguage: AISummaryLanguage;
   }): Promise<AIPendingSummaryChange>;
+  prepareAIConcepts(path: string, executionTarget: AISummaryExecutionTarget): Promise<AIConceptPreparation>;
+  generateAIConcepts(input: {
+    path: string;
+    sourceRevision: string;
+    executionTarget: AISummaryExecutionTarget;
+  }): Promise<AIPendingConceptChange>;
   applyAIChangeSet(changeSetId: string): Promise<AIAppliedChange>;
   undoAIChangeSet(historyId: string): Promise<{ historyId: string; sourcePath?: string }>;
 }

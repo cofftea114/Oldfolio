@@ -3,12 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { classifyDocumentPath, isDocumentManageable } from './document-presentation.js';
 
 describe('desktop document presentation', () => {
-  it('separates knowledge notes and transcripts while hiding bundle internals', () => {
+  it('separates notes, AI derivatives, and transcripts while hiding bundle internals', () => {
     const paths = [
       'bundles/personal/index.md',
       'bundles/personal/log.md',
       'bundles/personal/raw/media-a/source.md',
       'bundles/personal/wiki/summaries/video-summary.md',
+      'bundles/personal/wiki/concepts/local-first.md',
       'bundles/personal/wiki/transcripts/media-a/transcript.md',
       'bundles/synthesis/index.md',
       'bundles/synthesis/log.md',
@@ -19,11 +20,12 @@ describe('desktop document presentation', () => {
       'internal',
       'internal',
       'internal',
-      'knowledge',
+      'summary',
+      'concept',
       'transcript',
       'internal',
       'internal',
-      'knowledge',
+      'note',
     ]);
   });
 

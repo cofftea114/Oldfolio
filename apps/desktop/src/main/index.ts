@@ -820,6 +820,38 @@ function registerIpc(): void {
       activeAITasks.delete(controller);
     }
   });
+  ipcMain.handle('ai:prepare-concepts', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid concept preparation');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.path !== 'string'
+      || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+    ) throw new TypeError('Invalid concept preparation');
+    return requireAISummary().prepareConcepts(value.path, value.executionTarget);
+  });
+  ipcMain.handle('ai:generate-concepts', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null) throw new TypeError('Invalid concept extraction request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.path !== 'string'
+      || typeof value.sourceRevision !== 'string'
+      || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+    ) throw new TypeError('Invalid concept extraction request');
+    const controller = new AbortController();
+    activeAITasks.add(controller);
+    try {
+      return await requireAISummary().generateConcepts(
+        value.path,
+        value.sourceRevision,
+        controller.signal,
+        value.executionTarget,
+      );
+    } finally {
+      activeAITasks.delete(controller);
+    }
+  });
   ipcMain.handle('ai:apply-changeset', async (event, changeSetId: unknown) => {
     assertTrustedSender(event);
     if (typeof changeSetId !== 'string') throw new TypeError('Invalid AI change-set id');
@@ -858,7 +890,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;
