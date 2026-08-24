@@ -34,7 +34,9 @@ const api: OldfolioDesktopApi = {
   probeOnlineAI: (input) => ipcRenderer.invoke('ai:probe-online-provider', input),
   saveAISettings: (input) => ipcRenderer.invoke('ai:save-settings', input),
   saveOnlineAISettings: (input) => ipcRenderer.invoke('ai:save-online-settings', input),
+  clearOnlineAIKey: (preset) => ipcRenderer.invoke('ai:clear-online-key', preset),
   saveCloudTranscriptionSettings: (input) => ipcRenderer.invoke('ai:save-cloud-transcription-settings', input),
+  clearCloudTranscriptionCredentials: () => ipcRenderer.invoke('ai:clear-cloud-transcription-credentials'),
   prepareAISummary: (path, executionTarget, mode, outputLanguage) => ipcRenderer.invoke(
     'ai:prepare-summary',
     { path, executionTarget, mode, outputLanguage },

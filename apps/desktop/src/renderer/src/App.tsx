@@ -92,6 +92,7 @@ const ONLINE_SUMMARY_PRESETS: Readonly<Record<OnlineSummaryPreset, { label: stri
   grok: { label: 'Grok', endpoint: 'https://api.x.ai/v1/', model: 'grok-4.5' },
   qwen: { label: 'Qwen / 通义千问', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/', model: 'qwen3.7-plus' },
   gemini: { label: 'Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.6-flash' },
+  openrouter: { label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1/', model: 'openrouter/free' },
   custom: { label: '自定义 OpenAI-compatible', endpoint: '', model: '' },
 };
 
@@ -156,6 +157,7 @@ export function App() {
   const [onlineAPIKey, setOnlineAPIKey] = useState('');
   const [onlineHostConfirmed, setOnlineHostConfirmed] = useState(false);
   const [onlineModels, setOnlineModels] = useState<AIModelSummary[]>([]);
+  const [onlineModelQuery, setOnlineModelQuery] = useState('');
   const [onlineChatModel, setOnlineChatModel] = useState('');
   const [onlineContextWindow, setOnlineContextWindow] = useState('128000');
   const [onlineTranscriptionModel, setOnlineTranscriptionModel] = useState('gpt-4o-mini-transcribe');
@@ -197,6 +199,8 @@ export function App() {
   }[]>([]);
   const deletedDocument = deletedDocuments.at(-1) ?? null;
   const isSummaryNote = active?.path.startsWith('bundles/personal/wiki/summaries/') === true;
+  const selectedOnlineKeyAvailable = onlineAISettings?.keyAvailablePresets.includes(onlineSummaryPreset) ?? false;
+  const selectedOnlineKeyPersisted = onlineAISettings?.keyPersistedPresets.includes(onlineSummaryPreset) ?? false;
 
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
@@ -407,7 +411,7 @@ export function App() {
   };
 
   const probeOnlineAI = async () => {
-    if (!onlineAPIKey.trim()) return;
+    if (!onlineAPIKey.trim() && !selectedOnlineKeyAvailable) return;
     setAIBusy(true);
     setAIError('');
     setStatus('正在连接在线 OpenAI-compatible 服务…');
@@ -418,6 +422,7 @@ export function App() {
         hostConfirmed: onlineHostConfirmed,
       });
       setOnlineModels(models);
+      setOnlineModelQuery('');
       setOnlineChatModel((current) => {
         const selected = models.find((model) => model.id === current) ?? models[0];
         if (selected?.contextWindow) setOnlineContextWindow(String(selected.contextWindow));
@@ -433,7 +438,7 @@ export function App() {
   };
 
   const saveOnlineAISettings = async () => {
-    if (!onlineChatModel.trim() || !onlineAPIKey.trim()) return;
+    if (!onlineChatModel.trim() || (!onlineAPIKey.trim() && !selectedOnlineKeyAvailable)) return;
     setAIBusy(true);
     setAIError('');
     try {
@@ -449,10 +454,27 @@ export function App() {
       setOnlineAIEndpoint(settings.endpoint);
       setOnlineAPIKey('');
       setOnlineHostConfirmed(false);
-      setStatus('在线 AI 已连接；API Key 仅保留在当前运行会话');
+      setStatus(settings.keyPersisted
+        ? '在线 AI 配置已保存；API Key 已由操作系统加密保护'
+        : '在线 AI 配置已保存；当前系统无法安全持久化 Key，仅在本次运行可用');
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法保存在线 AI 配置');
       setStatus('在线 AI 配置失败');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const clearOnlineAIKey = async () => {
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const settings = await window.oldfolio.clearOnlineAIKey(onlineSummaryPreset);
+      setOnlineAISettings(settings);
+      setOnlineAPIKey('');
+      setStatus(`已从本机安全存储清除 ${ONLINE_SUMMARY_PRESETS[onlineSummaryPreset].label} API Key`);
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法清除在线 API Key');
     } finally {
       setAIBusy(false);
     }
@@ -477,9 +499,28 @@ export function App() {
       setCloudTranscriptionSettings(settings);
       setTencentSecretId('');
       setTencentSecretKey('');
-      setStatus('在线转录配置已保存；凭据仅保留在当前运行会话');
+      setStatus(settings.credentialPersisted
+        ? '在线转录配置已保存；凭据已由操作系统加密保护'
+        : '在线转录配置已保存；当前系统无法安全持久化凭据，仅在本次运行可用');
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法保存在线转录配置');
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const clearCloudTranscriptionCredentials = async () => {
+    setAIBusy(true);
+    setAIError('');
+    try {
+      const settings = await window.oldfolio.clearCloudTranscriptionCredentials();
+      setCloudTranscriptionSettings(settings);
+      if (settings.providerId === 'openai-compatible') setOnlineAISettings(await window.oldfolio.getOnlineAISettings());
+      setTencentSecretId('');
+      setTencentSecretKey('');
+      setStatus('已从本机安全存储清除在线转录凭据');
+    } catch (error: unknown) {
+      setAIError(error instanceof Error ? error.message : '无法清除在线转录凭据');
     } finally {
       setAIBusy(false);
     }
@@ -1015,6 +1056,14 @@ export function App() {
     () => visibleDocuments.filter((document) => document.category === 'transcript'),
     [visibleDocuments],
   );
+  const filteredOnlineModels = useMemo(() => {
+    const modelQuery = onlineModelQuery.trim().toLocaleLowerCase();
+    if (!modelQuery) return onlineModels;
+    return onlineModels.filter((model) => (
+      model.id.toLocaleLowerCase().includes(modelQuery)
+      || model.displayName.toLocaleLowerCase().includes(modelQuery)
+    ));
+  }, [onlineModelQuery, onlineModels]);
   const savedCloudCredentialsAvailable = cloudTranscriptionSettings?.providerId === cloudTranscriptionProvider
     && cloudTranscriptionSettings.credentialAvailable;
   const tencentCredentialCount = [tencentSecretId, tencentSecretKey].filter((value) => value.trim()).length;
@@ -1181,7 +1230,7 @@ export function App() {
                 <label className="field-label">转录模型
                   <input value={onlineTranscriptionModel} onChange={(event) => setOnlineTranscriptionModel(event.target.value)} placeholder="gpt-4o-mini-transcribe" />
                 </label>
-                <small className="model-help-note">使用“摘要模块”在线服务中配置的 endpoint 和会话 API Key，转录模型在此独立选择。</small>
+                <small className="model-help-note">使用“摘要模块”在线服务中配置的 endpoint 和本机安全保存的 API Key，转录模型在此独立选择。</small>
               </>}
               {cloudTranscriptionProvider === 'tencent-asr' && <>
                 <label className="field-label">地域<input value={tencentRegion} onChange={(event) => setTencentRegion(event.target.value)} placeholder="ap-guangzhou" /></label>
@@ -1206,13 +1255,16 @@ export function App() {
                 </small>
                 <label className="field-label">SecretId<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretId'} value={tencentSecretId} onChange={(event) => setTencentSecretId(event.target.value)} /></label>
                 <label className="field-label">SecretKey<input autoComplete="off" placeholder={savedCloudCredentialsAvailable ? '已安全保存；留空保持不变' : '请输入 SecretKey'} type="password" value={tencentSecretKey} onChange={(event) => setTencentSecretKey(event.target.value)} /></label>
-                {savedCloudCredentialsAvailable && <small className="model-help-note">凭据已安全保留在当前会话，留空再保存不会清除。</small>}
+                {savedCloudCredentialsAvailable && <small className="model-help-note">凭据{cloudTranscriptionSettings?.credentialPersisted ? '已由操作系统加密保存' : '仅在本次运行可用'}，留空再保存不会清除。</small>}
               </>}
               <button className="transcribe-button" disabled={aiBusy || (
                 cloudTranscriptionProvider === 'openai-compatible' ? !onlineTranscriptionModel.trim() :
                 !tencentRegion.trim() || !tencentEngine.trim() || (tencentCredentialCount !== 0 && tencentCredentialCount !== 2) || (!savedCloudCredentialsAvailable && tencentCredentialCount !== 2)
               )} onClick={() => void saveCloudTranscriptionSettings()}>保存在线转录配置</button>
-              {cloudTranscriptionSettings?.configured && <small className="model-help-note">已选：{cloudTranscriptionSettings.endpointHost} · {cloudTranscriptionSettings.model} · 凭据 {cloudTranscriptionSettings.credentialAvailable ? '本次会话可用' : '需重新输入'}</small>}
+              {cloudTranscriptionSettings?.configured && <small className="model-help-note">已选：{cloudTranscriptionSettings.endpointHost} · {cloudTranscriptionSettings.model} · 凭据 {cloudTranscriptionSettings.credentialPersisted ? '已在本机安全保存' : cloudTranscriptionSettings.credentialAvailable ? '仅本次运行可用' : '需重新输入'}</small>}
+              {cloudTranscriptionSettings?.providerId === 'tencent-asr' && cloudTranscriptionSettings.credentialAvailable && (
+                <button disabled={aiBusy} onClick={() => void clearCloudTranscriptionCredentials()}>清除已保存的转录凭据</button>
+              )}
               <div className="import-divider"><span>本地媒体</span></div>
               <button className="transcribe-button" disabled={aiBusy || importing || !vault || !savedCloudCredentialsAvailable || !mediaSettings?.ffmpeg.available} onClick={() => void transcribeCloudMedia()}>
                 {importing ? '处理中…' : '选择本地音视频并在线转录'}
@@ -1311,7 +1363,7 @@ export function App() {
                 <p className="model-help">摘要可独立选择在线大模型。完整摘要工作文档由你的设备直接发给服务商，Oldfolio 不代理请求。</p>
                 {onlineAISettings?.configured && (
                   <small className="model-help-note">
-                    已配置：{onlineAISettings.confirmedHost} · {onlineAISettings.chatModel} · API Key {onlineAISettings.keyAvailable ? '本次会话可用' : '需重新输入'}
+                    已配置：{onlineAISettings.confirmedHost} · {onlineAISettings.chatModel} · API Key {onlineAISettings.keyPersisted ? '已在本机安全保存' : onlineAISettings.keyAvailable ? '仅本次运行可用' : '需重新输入'}
                   </small>
                 )}
                 <label className="field-label">服务商预设
@@ -1319,13 +1371,23 @@ export function App() {
                     const preset = event.target.value as OnlineSummaryPreset;
                     const defaults = ONLINE_SUMMARY_PRESETS[preset];
                     setOnlineSummaryPreset(preset);
-                    if (preset !== 'custom') {
+                    setOnlineAPIKey('');
+                    if (onlineAISettings?.preset === preset) {
+                      setOnlineAIEndpoint(onlineAISettings.endpoint);
+                      setOnlineChatModel(onlineAISettings.chatModel);
+                      setOnlineContextWindow(String(onlineAISettings.contextWindow));
+                    } else if (preset !== 'custom') {
                       setOnlineAIEndpoint(defaults.endpoint);
                       setOnlineChatModel(defaults.model);
+                      setOnlineContextWindow(preset === 'openrouter' ? '200000' : '128000');
+                    } else {
+                      setOnlineAIEndpoint('');
+                      setOnlineChatModel('');
                       setOnlineContextWindow('128000');
                     }
                     setOnlineHostConfirmed(false);
                     setOnlineModels([]);
+                    setOnlineModelQuery('');
                   }}>
                     {(Object.entries(ONLINE_SUMMARY_PRESETS) as Array<[OnlineSummaryPreset, { label: string }]>).map(([id, preset]) => <option key={id} value={id}>{preset.label}</option>)}
                   </select>
@@ -1335,21 +1397,23 @@ export function App() {
                     disabled={aiBusy || !vault}
                     onChange={(event) => {
                       setOnlineAIEndpoint(event.target.value);
+                      if (onlineSummaryPreset !== 'custom') setOnlineAPIKey('');
                       setOnlineSummaryPreset('custom');
                       setOnlineHostConfirmed(false);
                       setOnlineModels([]);
+                      setOnlineModelQuery('');
                     }}
                     placeholder="https://api.openai.com/v1/"
                     type="url"
                     value={onlineAIEndpoint}
                   />
                 </label>
-                <label className="field-label">API Key（仅本次运行）
+                <label className="field-label">API Key（保存在本机安全存储）
                   <input
                     autoComplete="off"
                     disabled={aiBusy || !vault}
                     onChange={(event) => setOnlineAPIKey(event.target.value)}
-                    placeholder={onlineAISettings?.keyAvailable ? '当前会话已有 Key；重新配置时输入' : 'sk-…'}
+                    placeholder={selectedOnlineKeyAvailable ? `已保存 ${ONLINE_SUMMARY_PRESETS[onlineSummaryPreset].label} Key；留空保持不变` : 'sk-…'}
                     type="password"
                     value={onlineAPIKey}
                   />
@@ -1358,21 +1422,64 @@ export function App() {
                   <input checked={onlineHostConfirmed} disabled={aiBusy || !vault} onChange={(event) => setOnlineHostConfirmed(event.target.checked)} type="checkbox" />
                   我确认将内容直接发送到 {endpointHost(onlineAIEndpoint) || '上述域名'}，并由该服务商计费
                 </label>
-                <button disabled={aiBusy || !vault || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineAIEndpoint.trim()} onClick={() => void probeOnlineAI()}>
-                  {aiBusy ? '检测中…' : '检测在线模型'}
+                <button disabled={aiBusy || !vault || (!onlineAPIKey.trim() && !selectedOnlineKeyAvailable) || !onlineHostConfirmed || !onlineAIEndpoint.trim()} onClick={() => void probeOnlineAI()}>
+                  {aiBusy ? '读取中…' : onlineSummaryPreset === 'openrouter' ? '读取 OpenRouter 模型目录' : '检测在线模型'}
                 </button>
-                <label className="field-label">摘要模型
-                  <input disabled={aiBusy || !vault} list="online-summary-models" value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)} placeholder="输入或选择模型 ID" />
-                  <datalist id="online-summary-models">{onlineModels.map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</datalist>
+                {onlineModels.length > 0 && (
+                  <>
+                    <label className="field-label">搜索模型目录
+                      <input
+                        disabled={aiBusy || !vault}
+                        onChange={(event) => setOnlineModelQuery(event.target.value)}
+                        placeholder="搜索名称或 ID，例如 Claude、Gemini、Qwen、:free"
+                        type="search"
+                        value={onlineModelQuery}
+                      />
+                    </label>
+                    <label className="field-label">
+                      模型目录（显示 {filteredOnlineModels.length} / {onlineModels.length}）
+                      <select
+                        disabled={aiBusy || !vault || filteredOnlineModels.length === 0}
+                        onChange={(event) => {
+                          const selected = onlineModels.find((model) => model.id === event.target.value);
+                          setOnlineChatModel(event.target.value);
+                          if (selected?.contextWindow) setOnlineContextWindow(String(selected.contextWindow));
+                        }}
+                        value={filteredOnlineModels.some((model) => model.id === onlineChatModel) ? onlineChatModel : ''}
+                      >
+                        <option value="">选择检测到的模型…</option>
+                        {filteredOnlineModels.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.displayName === model.id ? model.id : `${model.displayName} — ${model.id}`}
+                            {model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                )}
+                <label className="field-label">当前摘要模型 ID
+                  <input disabled={aiBusy || !vault} value={onlineChatModel} onChange={(event) => setOnlineChatModel(event.target.value)} placeholder="可从目录选择，或手动输入模型 ID" />
                 </label>
+                {onlineSummaryPreset === 'openrouter' && (
+                  <small className="model-help-note">
+                    默认使用 openrouter/free 免费路由（免费账号通常每天 50 次请求）；充值后可改用 openrouter/auto 或具体付费模型。OpenRouter 仅用于文本 AI，不用于在线语音转录。
+                  </small>
+                )}
                 <label className="field-label">上下文窗口（Token）
                   <input disabled={aiBusy || !vault} min="8192" max="10000000" step="1024" type="number" value={onlineContextWindow} onChange={(event) => setOnlineContextWindow(event.target.value)} />
                 </label>
                 <small className="model-help-note">请按所选模型的实际规格填写，例如一百万上下文填写 1000000；摘要会据此决定全文直传或动态分窗。</small>
-                <button className="transcribe-button" disabled={aiBusy || !onlineAPIKey.trim() || !onlineHostConfirmed || !onlineChatModel.trim() || !Number.isSafeInteger(Number(onlineContextWindow))} onClick={() => void saveOnlineAISettings()}>
-                  保存配置并保留本次会话 Key
+                <button className="transcribe-button" disabled={aiBusy || (!onlineAPIKey.trim() && !selectedOnlineKeyAvailable) || !onlineHostConfirmed || !onlineChatModel.trim() || !Number.isSafeInteger(Number(onlineContextWindow))} onClick={() => void saveOnlineAISettings()}>
+                  保存配置和 API Key 到本机
                 </button>
-                <small className="model-help-note">endpoint、模型名和密钥引用保存在当前设备；API Key 只在主进程内存中保留，退出 Oldfolio 后清除，不写入 Vault、索引或日志。</small>
+                <small className="model-help-note">API Key 由操作系统加密后保存到设备目录，不进入 Vault、SQLite、WebDAV、普通配置或日志。Windows 使用 DPAPI，macOS 使用 Keychain。</small>
+                <small className="model-help-note">
+                  {ONLINE_SUMMARY_PRESETS[onlineSummaryPreset].label} API Key：{selectedOnlineKeyPersisted ? '已在本机安全保存' : selectedOnlineKeyAvailable ? '仅本次运行可用' : '尚未保存'}。各服务商的 Key 独立保存，切换时不会覆盖。
+                </small>
+                {selectedOnlineKeyAvailable && (
+                  <button disabled={aiBusy} onClick={() => void clearOnlineAIKey()}>清除 {ONLINE_SUMMARY_PRESETS[onlineSummaryPreset].label} API Key</button>
+                )}
               </>
             )}
             {aiError && <p className="media-error" role="alert">{aiError}</p>}

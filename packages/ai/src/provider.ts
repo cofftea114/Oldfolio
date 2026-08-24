@@ -33,8 +33,10 @@ export interface ProviderOptions {
   /** Some OpenAI-compatible services support JSON objects but not strict JSON Schema response formats. */
   readonly structuredOutputMode?: 'json-schema' | 'json-object';
   /** Maps the shared per-request reasoning switch to a provider-specific request shape. */
-  readonly reasoningDialect?: 'qwen' | 'deepseek';
+  readonly reasoningDialect?: 'qwen' | 'deepseek' | 'openrouter';
   readonly defaultReasoningMode?: 'provider-default' | 'disabled' | 'enabled';
+  /** Receive chat completions as OpenAI-compatible SSE to keep long remote generations active. */
+  readonly streamChatCompletions?: boolean;
 }
 
 export interface AIProviderErrorOptions extends ErrorOptions {
@@ -63,10 +65,15 @@ function transportErrorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const direct = (error as { readonly code?: unknown }).code;
   if (typeof direct === 'string' && direct) return direct;
+  const directMessage = error instanceof Error ? error.message : undefined;
+  const directMatch = directMessage?.match(/\b((?:UND_)?ERR_[A-Z0-9_]+)\b/u)?.[1];
+  if (directMatch) return directMatch;
   const cause = (error as { readonly cause?: unknown }).cause;
   if (typeof cause !== 'object' || cause === null) return undefined;
   const nested = (cause as { readonly code?: unknown }).code;
-  return typeof nested === 'string' && nested ? nested : undefined;
+  if (typeof nested === 'string' && nested) return nested;
+  const causeMessage = cause instanceof Error ? cause.message : undefined;
+  return causeMessage?.match(/\b((?:UND_)?ERR_[A-Z0-9_]+)\b/u)?.[1];
 }
 
 function isLocalEndpoint(url: URL): boolean {
@@ -111,6 +118,40 @@ async function readProviderErrorMessage(response: Response): Promise<string | un
     return safeProviderErrorMessage(JSON.parse(await response.text()) as unknown);
   } catch {
     return undefined;
+  }
+}
+
+async function readProviderJson(response: Response): Promise<unknown> {
+  let source: string;
+  try {
+    source = await response.text();
+  } catch (error: unknown) {
+    const code = transportErrorCode(error);
+    throw new AIProviderError(
+      `AI 服务响应在传输完成前中断${code ? `（${code}）` : ''}。请重试；如果持续发生，请更换模型或检查网络。`,
+      response.status,
+      code ?? 'INCOMPLETE_PROVIDER_RESPONSE',
+      { cause: error },
+    );
+  }
+  const normalized = source.replace(/^\uFEFF/u, '').trim();
+  if (!normalized) {
+    throw new AIProviderError(
+      'AI 服务返回了空响应。请重试；如果持续发生，请更换模型。',
+      response.status,
+      'EMPTY_PROVIDER_RESPONSE',
+    );
+  }
+  try {
+    return JSON.parse(normalized) as unknown;
+  } catch (error: unknown) {
+    const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    const message = mediaType === 'text/event-stream' || normalized.startsWith('data:')
+      ? 'AI 服务意外返回了流式事件，但 Oldfolio 已请求非流式 JSON。请重试；如果持续发生，请更换模型。'
+      : mediaType === 'text/html' || normalized.startsWith('<!DOCTYPE') || normalized.startsWith('<html')
+        ? 'AI 服务返回了网页而不是 API JSON，可能遇到网关或防护页面。请稍后重试。'
+        : 'AI 服务返回的内容不是完整有效的 JSON，可能是响应传输中断。请重试；如果持续发生，请更换模型。';
+    throw new AIProviderError(message, response.status, 'INVALID_PROVIDER_RESPONSE', { cause: error });
   }
 }
 
@@ -159,12 +200,12 @@ abstract class HttpAIProvider implements AIProvider {
     return validateAIEndpoint(config.endpoint || defaultEndpoint || '', this.options.endpointPolicy);
   }
 
-  protected async requestJson(
+  protected async request(
     url: URL,
     init: Omit<RequestInit, 'headers'> & { readonly headers?: HeadersInit },
     config: AIProviderConfig,
     context?: AIInvocationContext,
-  ): Promise<unknown> {
+  ): Promise<Response> {
     const headers = new Headers(this.options.defaultHeaders);
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     if (config.secretRef) {
@@ -199,18 +240,30 @@ abstract class HttpAIProvider implements AIProvider {
     if (!response.ok) {
       const detail = await readProviderErrorMessage(response);
       const contextWindow = contextWindowErrorDetails(detail);
+      const insufficientCredits = response.status === 402;
       throw new AIProviderError(
-        `AI provider request failed with status ${response.status}${detail ? `: ${detail}` : '.'}`,
+        insufficientCredits
+          ? 'AI 服务账户余额不足，或当前模型不属于免费额度。请充值后重试，或切换到服务商提供的免费模型。'
+          : `AI provider request failed with status ${response.status}${detail ? `: ${detail}` : '.'}`,
         response.status,
-        contextWindow ? 'CONTEXT_WINDOW_EXCEEDED' : undefined,
+        insufficientCredits
+          ? 'INSUFFICIENT_CREDITS'
+          : contextWindow
+            ? 'CONTEXT_WINDOW_EXCEEDED'
+            : undefined,
         contextWindow,
       );
     }
-    try {
-      return (await response.json()) as unknown;
-    } catch {
-      throw new AIProviderError('AI provider returned invalid JSON.', response.status);
-    }
+    return response;
+  }
+
+  protected async requestJson(
+    url: URL,
+    init: Omit<RequestInit, 'headers'> & { readonly headers?: HeadersInit },
+    config: AIProviderConfig,
+    context?: AIInvocationContext,
+  ): Promise<unknown> {
+    return readProviderJson(await this.request(url, init, config, context));
   }
 }
 
@@ -233,6 +286,129 @@ interface OpenAIResponse {
     readonly finish_reason?: unknown;
   }[];
   readonly usage?: { readonly prompt_tokens?: unknown; readonly completion_tokens?: unknown };
+}
+
+interface OpenAIStreamChunk {
+  readonly model?: unknown;
+  readonly choices?: readonly {
+    readonly delta?: { readonly content?: unknown; readonly reasoning_content?: unknown; readonly reasoning?: unknown };
+    readonly message?: { readonly content?: unknown; readonly reasoning_content?: unknown; readonly reasoning?: unknown };
+    readonly finish_reason?: unknown;
+  }[];
+  readonly usage?: { readonly prompt_tokens?: unknown; readonly completion_tokens?: unknown };
+  readonly error?: unknown;
+}
+
+async function readOpenAIEventStream(response: Response, maxOutputTokens: number | undefined): Promise<OpenAIResponse> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new AIProviderError('AI 服务没有返回可读取的流。请重试或更换模型。', response.status, 'EMPTY_PROVIDER_STREAM');
+  }
+  const decoder = new TextDecoder();
+  const maximumCharacters = Math.min(32 * 1024 * 1024, Math.max(1_048_576, (maxOutputTokens ?? 32_768) * 16));
+  let buffer = '';
+  let content = '';
+  let model: string | undefined;
+  let streamFinishReason: unknown;
+  let usage: OpenAIResponse['usage'];
+  let reasoningSeen = false;
+  let doneSeen = false;
+
+  const consumeData = (data: string): void => {
+    const normalized = data.trim();
+    if (!normalized) return;
+    if (normalized === '[DONE]') {
+      doneSeen = true;
+      return;
+    }
+    let chunk: OpenAIStreamChunk;
+    try {
+      chunk = JSON.parse(normalized) as OpenAIStreamChunk;
+    } catch (error: unknown) {
+      throw new AIProviderError(
+        'AI 服务返回了损坏的流式事件。请重试；如果持续发生，请更换模型。',
+        response.status,
+        'INVALID_PROVIDER_STREAM',
+        { cause: error },
+      );
+    }
+    if (chunk.error !== undefined) {
+      const detail = safeProviderErrorMessage(chunk);
+      throw new AIProviderError(
+        detail ? `AI 服务在生成过程中失败：${detail}` : 'AI 服务在生成过程中失败。请重试或更换模型。',
+        response.status,
+        'PROVIDER_STREAM_ERROR',
+      );
+    }
+    if (typeof chunk.model === 'string') model = chunk.model;
+    if (chunk.usage !== undefined) usage = chunk.usage;
+    const choice = chunk.choices?.[0];
+    const deltaContent = choice?.delta?.content;
+    const messageContent = choice?.message?.content;
+    const nextContent = typeof deltaContent === 'string'
+      ? deltaContent
+      : typeof messageContent === 'string'
+        ? messageContent
+        : '';
+    if (nextContent) {
+      content += nextContent;
+      if (content.length > maximumCharacters) {
+        throw new AIProviderError('AI 服务的流式输出超过安全上限，已停止接收。', response.status, 'PROVIDER_STREAM_TOO_LARGE');
+      }
+    }
+    reasoningSeen ||= typeof choice?.delta?.reasoning_content === 'string'
+      || typeof choice?.delta?.reasoning === 'string'
+      || typeof choice?.message?.reasoning_content === 'string'
+      || typeof choice?.message?.reasoning === 'string';
+    if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
+      streamFinishReason = choice.finish_reason;
+    }
+  };
+
+  try {
+    while (!doneSeen) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/u);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line.startsWith('data:')) consumeData(line.slice(5));
+      }
+      if (done) {
+        if (buffer.startsWith('data:')) consumeData(buffer.slice(5));
+        break;
+      }
+    }
+  } catch (error: unknown) {
+    if (error instanceof AIProviderError) throw error;
+    const code = transportErrorCode(error);
+    throw new AIProviderError(
+      `AI 服务的流式响应在完成前中断${code ? `（${code}）` : ''}。未完成内容已丢弃，请重试或更换模型。`,
+      response.status,
+      code ?? 'INCOMPLETE_PROVIDER_STREAM',
+      { cause: error },
+    );
+  } finally {
+    reader.releaseLock();
+  }
+  if (!doneSeen) {
+    throw new AIProviderError(
+      'AI 服务的流式响应没有正常结束。未完成内容已丢弃，请重试或更换模型。',
+      response.status,
+      'INCOMPLETE_PROVIDER_STREAM',
+    );
+  }
+  return {
+    ...(model === undefined ? {} : { model }),
+    choices: [{
+      message: {
+        content,
+        ...(reasoningSeen ? { reasoning_content: 'present' } : {}),
+      },
+      finish_reason: streamFinishReason,
+    }],
+    ...(usage === undefined ? {} : { usage }),
+  };
 }
 
 function supportsOnlyJsonTranscription(model: string): boolean {
@@ -262,6 +438,7 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
       context,
     )) as { readonly data?: readonly {
       readonly id?: unknown;
+      readonly name?: unknown;
       readonly context_window?: unknown;
       readonly context_length?: unknown;
       readonly max_context_length?: unknown;
@@ -276,7 +453,7 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
         );
         return {
           id: item.id,
-          displayName: item.id,
+          displayName: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : item.id,
           capabilities: ['chat'],
           local: false,
           ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -290,20 +467,28 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
     context?: AIInvocationContext,
   ): Promise<AICompletion> {
     const reasoningMode = request.reasoningMode ?? this.options.defaultReasoningMode ?? 'provider-default';
-    const reasoningBody = this.options.reasoningDialect === 'qwen' && reasoningMode !== 'provider-default'
+    const reasoningBody: Readonly<Record<string, unknown>> = this.options.reasoningDialect === 'qwen' && reasoningMode !== 'provider-default'
       ? { enable_thinking: reasoningMode === 'enabled' }
       : this.options.reasoningDialect === 'deepseek' && reasoningMode !== 'provider-default'
         ? { thinking: { type: reasoningMode } }
-        : {};
-    const response = (await this.requestJson(
-      resolveEndpoint(this.endpoint(config), 'chat/completions'),
-      {
+        : this.options.reasoningDialect === 'openrouter' && reasoningMode !== 'provider-default'
+          ? {
+              reasoning: reasoningMode === 'enabled'
+                ? { enabled: true }
+                : { effort: 'none' },
+            }
+          : {};
+    const stream = this.options.streamChatCompletions === true;
+    const url = resolveEndpoint(this.endpoint(config), 'chat/completions');
+    const invoke = async (invocationReasoningBody: Readonly<Record<string, unknown>>): Promise<OpenAIResponse> => {
+      const init = {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           model: request.model,
           messages: request.messages,
-          ...reasoningBody,
+          stream,
+          ...invocationReasoningBody,
           ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
           ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),
           ...(request.responseSchema === undefined
@@ -319,10 +504,23 @@ export class OpenAICompatibleProvider extends HttpAIProvider {
                 },
               }),
         }),
-      },
-      config,
-      context,
-    )) as OpenAIResponse;
+      } satisfies Omit<RequestInit, 'headers'> & { readonly headers?: HeadersInit };
+      return stream
+        ? readOpenAIEventStream(await this.request(url, init, config, context), request.maxOutputTokens)
+        : await this.requestJson(url, init, config, context) as OpenAIResponse;
+    };
+    let response: OpenAIResponse;
+    try {
+      response = await invoke(reasoningBody);
+    } catch (error: unknown) {
+      const mandatoryReasoningRejected = this.options.reasoningDialect === 'openrouter'
+        && reasoningMode === 'disabled'
+        && error instanceof AIProviderError
+        && error.status === 400
+        && /reasoning.*(?:mandatory|required).*cannot be disabled/iu.test(error.message);
+      if (!mandatoryReasoningRejected) throw error;
+      response = await invoke({});
+    }
     const choice = response.choices?.[0];
     if (choice?.message?.content === '' && choice.finish_reason === 'length'
       && (typeof choice.message.reasoning_content === 'string' || typeof choice.message.reasoning === 'string')) {

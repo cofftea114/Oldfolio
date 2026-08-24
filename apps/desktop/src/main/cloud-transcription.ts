@@ -5,7 +5,8 @@ import { dirname } from 'node:path';
 import { TencentCloudASRProvider } from '@oldfolio/ai';
 import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfolio/domain';
 
-import type { OnlineAIService, OnlineMediaReader, SessionSecretStore } from './online-ai.js';
+import type { OnlineAIService, OnlineMediaReader } from './online-ai.js';
+import type { SecretStore } from './device-secret-store.js';
 import { DEFAULT_TENCENT_ASR_ENGINE, isTencentASREngine } from '../shared/contracts.js';
 
 export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
@@ -23,6 +24,8 @@ export interface CloudTranscriptionConfig {
 export interface CloudTranscriptionSettings extends CloudTranscriptionConfig {
   readonly configured: boolean;
   readonly credentialAvailable: boolean;
+  readonly credentialPersisted: boolean;
+  readonly secureStorageAvailable: boolean;
   readonly endpointHost: string;
   readonly inputMode: 'chunks';
 }
@@ -117,7 +120,7 @@ export class CloudTranscriptionConfigStore {
 export class CloudTranscriptionService {
   constructor(
     private readonly configStore: CloudTranscriptionConfigStore,
-    private readonly secrets: SessionSecretStore,
+    private readonly secrets: SecretStore,
     private readonly onlineAI: OnlineAIService,
     private readonly fetchImplementation: typeof fetch,
     private readonly readMedia: OnlineMediaReader,
@@ -131,6 +134,8 @@ export class CloudTranscriptionService {
         ...config,
         configured: Boolean(config.model && online.endpoint),
         credentialAvailable: online.keyAvailable,
+        credentialPersisted: online.keyPersisted,
+        secureStorageAvailable: online.secureStorageAvailable,
         endpointHost: online.confirmedHost,
         inputMode: 'chunks',
       };
@@ -140,6 +145,8 @@ export class CloudTranscriptionService {
       ...config,
       configured: Boolean(config.model && config.region),
       credentialAvailable: Boolean(this.secrets.get(config.secretRef)),
+      credentialPersisted: this.secrets.isPersisted(config.secretRef),
+      secureStorageAvailable: this.secrets.persistenceAvailable,
       endpointHost: target.host,
       inputMode: target.inputMode,
     };
@@ -155,7 +162,7 @@ export class CloudTranscriptionService {
       const provided = credentialValues.filter(Boolean).length;
       if (provided > 0 && provided < credentialValues.length) throw new Error('请完整填写 SecretId 和 SecretKey。');
       if (provided === credentialValues.length) {
-        this.secrets.set(TENCENT_SECRET_REF, JSON.stringify({
+        await this.secrets.persist(TENCENT_SECRET_REF, JSON.stringify({
           secretId: bounded(input.secretId, 'SecretId', 512),
           secretKey: bounded(input.secretKey, 'SecretKey', 512),
           region: config.region,
@@ -164,13 +171,8 @@ export class CloudTranscriptionService {
         throw new Error('请填写腾讯云转录凭据。');
       }
     }
-    try {
-      await this.configStore.save(config);
-      return this.settings();
-    } catch (error) {
-      if (config.providerId === 'tencent-asr') this.secrets.delete(config.secretRef);
-      throw error;
-    }
+    await this.configStore.save(config);
+    return this.settings();
   }
 
   async runtime(signal?: AbortSignal): Promise<CloudTranscriptionRuntime> {
@@ -179,7 +181,7 @@ export class CloudTranscriptionService {
       const runtime = await this.onlineAI.transcriptionRuntime(config.model, signal);
       return { ...runtime, inputMode: 'chunks' };
     }
-    if (!this.secrets.get(config.secretRef)) throw new Error('云转录凭据只保留在当前会话，请重新输入并保存。');
+    if (!this.secrets.get(config.secretRef)) throw new Error('没有可用的云转录凭据，请重新输入并保存。');
     const target = endpoint(config);
     const context: AIInvocationContext = {
       resolveSecret: (reference) => Promise.resolve(this.secrets.get(reference)),
@@ -194,5 +196,15 @@ export class CloudTranscriptionService {
       host: target.host,
       inputMode: target.inputMode,
     };
+  }
+
+  async clearSavedCredentials(): Promise<CloudTranscriptionSettings> {
+    const config = await this.configStore.load();
+    if (config.providerId === 'openai-compatible') {
+      await this.onlineAI.clearSavedKey();
+    } else {
+      await this.secrets.remove(config.secretRef);
+    }
+    return this.settings();
   }
 }

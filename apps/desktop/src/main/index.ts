@@ -1,6 +1,6 @@
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
@@ -18,6 +18,7 @@ import { AIWikiChatService } from './ai-wiki-chat.js';
 import { importCaptionFile } from './caption-import.js';
 import { DocumentLifecycleService } from './document-lifecycle.js';
 import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './cloud-transcription.js';
+import { DeviceSecretStore, type SecretEncryption } from './device-secret-store.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
@@ -26,7 +27,6 @@ import { downloadRemoteMediaAsset } from './remote-media.js';
 import {
   OnlineAIConfigStore,
   OnlineAIService,
-  SessionSecretStore,
 } from './online-ai.js';
 import type { OnlineSummaryPreset } from './online-ai.js';
 import { resumeOnlineMediaTranscription, transcribeCloudMediaFile, transcribeOnlineMediaUrl } from './online-media-transcription.js';
@@ -61,7 +61,18 @@ const chromiumNetworkFetch: typeof fetch = (input, init) => net.fetch(
   input instanceof URL ? input.href : input,
   init,
 );
+// Remote SSE completions use Node's HTTP stack. Chromium net.fetch remains dedicated to local
+// model compatibility, where waiting for response headers can exceed Undici's default timeout.
+const remoteNetworkFetch: typeof fetch = globalThis.fetch;
 const localAIProvider = createLocalAIProviderResolver(chromiumNetworkFetch);
+const osSecretEncryption: SecretEncryption = {
+  isAvailable: async () => {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
+    return process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text';
+  },
+  encrypt: (plainText) => safeStorage.encryptStringAsync(plainText),
+  decrypt: (encrypted) => safeStorage.decryptStringAsync(encrypted),
+};
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'oldfolio-media', privileges: { standard: true, secure: true, stream: true } },
@@ -760,7 +771,7 @@ function registerIpc(): void {
       || typeof value.contextWindow !== 'number'
       || typeof value.hostConfirmed !== 'boolean'
     ) throw new TypeError('Invalid online AI settings');
-    const presets = ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini'] as const;
+    const presets = ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini', 'openrouter'] as const;
     if (value.preset !== undefined && !presets.includes(value.preset as typeof presets[number])) {
       throw new TypeError('Invalid online AI preset');
     }
@@ -773,6 +784,14 @@ function registerIpc(): void {
       ...(typeof value.transcriptionModel === 'string' ? { transcriptionModel: value.transcriptionModel } : {}),
       hostConfirmed: value.hostConfirmed,
     });
+  });
+  ipcMain.handle('ai:clear-online-key', async (event, preset: unknown) => {
+    assertTrustedSender(event);
+    const presets = ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini', 'openrouter'] as const;
+    if (typeof preset !== 'string' || !presets.includes(preset as typeof presets[number])) {
+      throw new TypeError('Invalid online AI preset');
+    }
+    return requireOnlineAI().clearSavedKey(preset as OnlineSummaryPreset);
   });
   ipcMain.handle('ai:save-cloud-transcription-settings', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -790,6 +809,10 @@ function registerIpc(): void {
       secretId: value.secretId, secretKey: value.secretKey,
     });
     throw new TypeError('Invalid cloud transcription settings');
+  });
+  ipcMain.handle('ai:clear-cloud-transcription-credentials', async (event) => {
+    assertTrustedSender(event);
+    return requireCloudTranscription().clearSavedCredentials();
   });
   ipcMain.handle('ai:prepare-summary', async (event, input: unknown) => {
     assertTrustedSender(event);
@@ -1001,14 +1024,18 @@ function createWindow(): void {
   }
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   mediaDeviceConfig = new MediaDeviceConfigStore(join(app.getPath('userData'), 'device', 'media.json'));
   aiDeviceConfig = new AIDeviceConfigStore(join(app.getPath('userData'), 'device', 'ai.json'));
-  const sessionSecrets = new SessionSecretStore();
+  const sessionSecrets = new DeviceSecretStore(
+    join(app.getPath('userData'), 'device', 'credentials.json'),
+    osSecretEncryption,
+  );
+  await sessionSecrets.initialize();
   onlineAI = new OnlineAIService(
     new OnlineAIConfigStore(join(app.getPath('userData'), 'device', 'online-ai.json')),
     sessionSecrets,
-    chromiumNetworkFetch,
+    remoteNetworkFetch,
     readControlledOnlineAudio,
   );
   cloudTranscription = new CloudTranscriptionService(

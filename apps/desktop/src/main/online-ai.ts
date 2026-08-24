@@ -6,10 +6,21 @@ import { OpenAICompatibleProvider, validateAIEndpoint } from '@oldfolio/ai';
 import type { AIInvocationContext, AIProvider, AIProviderConfig } from '@oldfolio/domain';
 
 import { normalizeAIContextWindow } from './ai-device-config.js';
+import type { SecretStore } from './device-secret-store.js';
 
-const ONLINE_SECRET_REF = 'session:online-openai-compatible';
+const LEGACY_ONLINE_SECRET_REF = 'session:online-openai-compatible';
 
-export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
+export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini' | 'openrouter';
+
+const ONLINE_SUMMARY_PRESET_IDS: readonly OnlineSummaryPreset[] = [
+  'custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini', 'openrouter',
+];
+
+type OnlineAISecretRef = `online-ai:${OnlineSummaryPreset}`;
+
+function secretRefForPreset(preset: OnlineSummaryPreset): OnlineAISecretRef {
+  return `online-ai:${preset}`;
+}
 
 export const ONLINE_SUMMARY_PRESETS: Readonly<Record<Exclude<OnlineSummaryPreset, 'custom'>, {
   readonly endpoint: string;
@@ -24,6 +35,7 @@ export const ONLINE_SUMMARY_PRESETS: Readonly<Record<Exclude<OnlineSummaryPreset
   grok: { endpoint: 'https://api.x.ai/v1/', model: 'grok-4.5', label: 'Grok' },
   qwen: { endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/', model: 'qwen3.7-plus', label: 'Qwen' },
   gemini: { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.6-flash', label: 'Gemini' },
+  openrouter: { endpoint: 'https://openrouter.ai/api/v1/', model: 'openrouter/free', label: 'OpenRouter' },
 };
 
 export interface OnlineAIConfig {
@@ -34,12 +46,16 @@ export interface OnlineAIConfig {
   readonly chatModel: string;
   readonly transcriptionModel: string;
   readonly contextWindow: number;
-  readonly secretRef: typeof ONLINE_SECRET_REF;
+  readonly secretRef: OnlineAISecretRef;
 }
 
 export interface OnlineAISettings extends OnlineAIConfig {
   readonly configured: boolean;
   readonly keyAvailable: boolean;
+  readonly keyPersisted: boolean;
+  readonly secureStorageAvailable: boolean;
+  readonly keyAvailablePresets: readonly OnlineSummaryPreset[];
+  readonly keyPersistedPresets: readonly OnlineSummaryPreset[];
 }
 
 export interface ConfigureOnlineAIInput {
@@ -73,7 +89,7 @@ const DEFAULT_CONFIG: OnlineAIConfig = {
   chatModel: '',
   transcriptionModel: '',
   contextWindow: 128_000,
-  secretRef: ONLINE_SECRET_REF,
+  secretRef: secretRefForPreset('openai'),
 };
 
 function boundedModel(value: string, label: string): string {
@@ -98,18 +114,27 @@ export function normalizeOnlineAIEndpoint(value: string, hostConfirmed: boolean)
   return url;
 }
 
+function presetForEndpoint(endpoint: URL): OnlineSummaryPreset {
+  return Object.entries(ONLINE_SUMMARY_PRESETS)
+    .find(([, item]) => new URL(item.endpoint).hostname === endpoint.hostname)?.[0] as OnlineSummaryPreset | undefined
+    ?? 'custom';
+}
+
 function parseConfig(source: string): OnlineAIConfig {
-  const value = JSON.parse(source) as Partial<OnlineAIConfig>;
+  const value = JSON.parse(source) as Omit<Partial<OnlineAIConfig>, 'secretRef'> & { readonly secretRef?: unknown };
   if (
     value.version !== 1 || typeof value.endpoint !== 'string' || typeof value.confirmedHost !== 'string'
     || typeof value.chatModel !== 'string' || typeof value.transcriptionModel !== 'string'
-    || value.secretRef !== ONLINE_SECRET_REF
+    || typeof value.secretRef !== 'string'
   ) throw new Error('在线 AI 设备配置无效。');
   const endpoint = normalizeOnlineAIEndpoint(value.endpoint, true);
-  const preset = typeof value.preset === 'string' && ['custom', 'openai', 'deepseek', 'kimi', 'glm', 'minimax', 'grok', 'qwen', 'gemini'].includes(value.preset)
+  const preset = typeof value.preset === 'string' && ONLINE_SUMMARY_PRESET_IDS.includes(value.preset)
     ? value.preset
-    : Object.entries(ONLINE_SUMMARY_PRESETS).find(([, item]) => new URL(item.endpoint).hostname === endpoint.hostname)?.[0] as OnlineSummaryPreset | undefined
-      ?? 'custom';
+    : presetForEndpoint(endpoint);
+  const expectedSecretRef = secretRefForPreset(preset);
+  if (value.secretRef !== LEGACY_ONLINE_SECRET_REF && value.secretRef !== expectedSecretRef) {
+    throw new Error('在线 AI 密钥引用无效。');
+  }
   if (endpoint.hostname.toLowerCase() !== value.confirmedHost.toLowerCase()) {
     throw new Error('在线 AI 配置的已确认域名不匹配。');
   }
@@ -121,7 +146,7 @@ function parseConfig(source: string): OnlineAIConfig {
     chatModel: value.chatModel.trim(),
     transcriptionModel: value.transcriptionModel.trim(),
     contextWindow: normalizeAIContextWindow(value.contextWindow, 128_000),
-    secretRef: ONLINE_SECRET_REF,
+    secretRef: expectedSecretRef,
   };
 }
 
@@ -149,12 +174,22 @@ export class OnlineAIConfigStore {
   }
 }
 
-export class SessionSecretStore {
+export class SessionSecretStore implements SecretStore {
   readonly #secrets = new Map<string, string>();
+  readonly persistenceAvailable = false;
 
   set(reference: string, secret: string): void {
+    this.setSession(reference, secret);
+  }
+
+  setSession(reference: string, secret: string): void {
     if (!reference.trim() || !secret.trim()) throw new Error('API Key 不能为空。');
     this.#secrets.set(reference, secret.trim());
+  }
+
+  persist(reference: string, secret: string): Promise<boolean> {
+    this.setSession(reference, secret);
+    return Promise.resolve(false);
   }
 
   get(reference: string): string | undefined {
@@ -162,28 +197,48 @@ export class SessionSecretStore {
   }
 
   delete(reference: string): void {
+    this.deleteSession(reference);
+  }
+
+  deleteSession(reference: string): void {
     this.#secrets.delete(reference);
   }
 
-  clear(): void {
+  remove(reference: string): Promise<void> {
+    this.deleteSession(reference);
+    return Promise.resolve();
+  }
+
+  clearSession(): void {
     this.#secrets.clear();
+  }
+
+  isPersisted(): boolean {
+    return false;
   }
 }
 
 export class OnlineAIService {
+  #legacyMigrationQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly configStore: OnlineAIConfigStore,
-    private readonly secrets: SessionSecretStore,
+    private readonly secrets: SecretStore,
     private readonly fetchImplementation: typeof fetch,
     private readonly readMedia: OnlineMediaReader,
   ) {}
 
   async settings(): Promise<OnlineAISettings> {
     const config = await this.configStore.load();
+    await this.migrateLegacySecret(config.secretRef);
     return {
       ...config,
       configured: Boolean(config.chatModel),
       keyAvailable: Boolean(this.secrets.get(config.secretRef)),
+      keyPersisted: this.secrets.isPersisted(config.secretRef),
+      secureStorageAvailable: this.secrets.persistenceAvailable,
+      keyAvailablePresets: ONLINE_SUMMARY_PRESET_IDS.filter((preset) => Boolean(this.secrets.get(secretRefForPreset(preset)))),
+      keyPersistedPresets: ONLINE_SUMMARY_PRESET_IDS.filter((preset) => this.secrets.isPersisted(secretRefForPreset(preset))),
     };
   }
 
@@ -193,11 +248,16 @@ export class OnlineAIService {
     contextWindow?: number;
   }[]> {
     const url = normalizeOnlineAIEndpoint(endpoint, hostConfirmed);
-    const provider = this.provider(url, 'custom');
-    this.secrets.set(ONLINE_SECRET_REF, apiKey);
+    const preset = presetForEndpoint(url);
+    const secretRef = secretRefForPreset(preset);
+    await this.migrateLegacySecret(secretRef);
+    const provider = this.provider(url, preset);
+    const previousSecret = this.secrets.get(secretRef);
+    if (apiKey.trim()) this.secrets.setSession(secretRef, apiKey);
+    else if (!previousSecret) throw new Error('请填写在线 API Key。');
     try {
       const models = await provider.listModels({
-        providerId: 'openai-compatible', endpoint: url.href, model: '', secretRef: ONLINE_SECRET_REF,
+        providerId: 'openai-compatible', endpoint: url.href, model: '', secretRef,
       }, this.context());
       return models.map((model) => ({
         id: model.id,
@@ -205,40 +265,46 @@ export class OnlineAIService {
         ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
       }));
     } catch (error) {
-      this.secrets.delete(ONLINE_SECRET_REF);
+      if (apiKey.trim()) {
+        if (previousSecret) this.secrets.setSession(secretRef, previousSecret);
+        else this.secrets.deleteSession(secretRef);
+      }
       throw error;
     }
   }
 
   async configure(input: ConfigureOnlineAIInput): Promise<OnlineAISettings> {
     const endpoint = normalizeOnlineAIEndpoint(input.endpoint, input.hostConfirmed);
+    const preset = input.preset ?? presetForEndpoint(endpoint);
+    const secretRef = secretRefForPreset(preset);
+    await this.migrateLegacySecret(secretRef);
     const transcriptionModel = input.transcriptionModel?.trim()
       ? boundedModel(input.transcriptionModel, '在线转录模型')
       : (await this.configStore.load()).transcriptionModel;
-    this.secrets.set(ONLINE_SECRET_REF, input.apiKey);
     const config: OnlineAIConfig = {
       version: 1,
-      preset: input.preset ?? 'custom',
+      preset,
       endpoint: endpoint.href,
       confirmedHost: endpoint.hostname.toLowerCase(),
       chatModel: boundedModel(input.chatModel, '在线总结模型'),
       transcriptionModel,
       contextWindow: normalizeAIContextWindow(input.contextWindow, 128_000),
-      secretRef: ONLINE_SECRET_REF,
+      secretRef,
     };
-    try {
-      await this.configStore.save(config);
-      return this.settings();
-    } catch (error) {
-      this.secrets.delete(ONLINE_SECRET_REF);
-      throw error;
+    if (!input.apiKey.trim() && !this.secrets.get(secretRef)) {
+      throw new Error('请填写在线 API Key。');
     }
+    await this.configStore.save(config);
+    if (input.apiKey.trim()) {
+      await this.secrets.persist(secretRef, input.apiKey);
+    }
+    return this.settings();
   }
 
   async summaryRuntime(signal?: AbortSignal): Promise<OnlineAIRuntime> {
     const config = await this.configStore.load();
     if (!config.chatModel) throw new Error('请先配置在线摘要服务与模型。');
-    if (!this.secrets.get(config.secretRef)) throw new Error('在线 API Key 只保留在当前会话，请重新输入并连接。');
+    if (!this.secrets.get(config.secretRef)) throw new Error('没有可用的在线 API Key，请重新输入并保存。');
     const endpoint = normalizeOnlineAIEndpoint(config.endpoint, true);
     return {
       provider: this.provider(endpoint, config.preset),
@@ -253,6 +319,12 @@ export class OnlineAIService {
   }
 
   async transcriptionRuntime(model: string, signal?: AbortSignal): Promise<OnlineAIRuntime> {
+    const config = await this.configStore.load();
+    if (config.preset === 'openrouter') {
+      throw new Error(
+        'OpenRouter 当前仅用于摘要、概念提取和知识库问答，不提供 Oldfolio 在线转录所需的 /audio/transcriptions 接口。请为在线转录选择其他 OpenAI-compatible 服务或腾讯云。',
+      );
+    }
     const runtime = await this.summaryRuntime(signal);
     return {
       ...runtime,
@@ -266,7 +338,40 @@ export class OnlineAIService {
   }
 
   clearSessionKey(): void {
-    this.secrets.clear();
+    this.secrets.clearSession();
+  }
+
+  async clearSavedKey(preset?: OnlineSummaryPreset): Promise<OnlineAISettings> {
+    const config = await this.configStore.load();
+    const targetPreset = preset ?? config.preset;
+    const secretRef = secretRefForPreset(targetPreset);
+    await this.migrateLegacySecret(secretRef);
+    await this.secrets.remove(secretRef);
+    return this.settings();
+  }
+
+  private async migrateLegacySecret(targetReference: OnlineAISecretRef): Promise<void> {
+    const migration = this.#legacyMigrationQueue.then(() => this.performLegacySecretMigration(targetReference));
+    this.#legacyMigrationQueue = migration.catch(() => undefined);
+    await migration;
+  }
+
+  private async performLegacySecretMigration(targetReference: OnlineAISecretRef): Promise<void> {
+    const legacy = this.secrets.get(LEGACY_ONLINE_SECRET_REF);
+    if (!legacy) return;
+    if (!this.secrets.get(targetReference)) {
+      if (this.secrets.isPersisted(LEGACY_ONLINE_SECRET_REF)) {
+        try {
+          await this.secrets.persist(targetReference, legacy);
+        } catch {
+          this.secrets.setSession(targetReference, legacy);
+          return;
+        }
+      } else {
+        this.secrets.setSession(targetReference, legacy);
+      }
+    }
+    await this.secrets.remove(LEGACY_ONLINE_SECRET_REF);
   }
 
   private provider(endpoint: URL, preset: OnlineSummaryPreset): OpenAICompatibleProvider {
@@ -274,12 +379,23 @@ export class OnlineAIService {
       endpointPolicy: { confirmedHosts: [endpoint.hostname] },
       fetch: this.fetchImplementation,
       readMedia: this.readMedia,
+      ...(preset === 'openrouter'
+        ? {
+            streamChatCompletions: true,
+            defaultHeaders: {
+              'HTTP-Referer': 'https://github.com/cofftea114/Oldfolio',
+              'X-OpenRouter-Title': 'Oldfolio',
+            },
+          }
+        : {}),
       structuredOutputMode: preset === 'openai' || preset === 'grok' || preset === 'gemini' || preset === 'custom' ? 'json-schema' : 'json-object',
       ...(preset === 'qwen'
         ? { reasoningDialect: 'qwen' as const, defaultReasoningMode: 'disabled' as const }
         : preset === 'deepseek'
           ? { reasoningDialect: 'deepseek' as const, defaultReasoningMode: 'disabled' as const }
-          : {}),
+          : preset === 'openrouter'
+            ? { reasoningDialect: 'openrouter' as const, defaultReasoningMode: 'disabled' as const }
+            : {}),
     });
   }
 

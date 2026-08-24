@@ -91,11 +91,13 @@ burned-in subtitles require a future OCR pipeline.
 LM Studio uses its native v1 chat API with reasoning disabled for fast summaries and the editing stage. The AI
 workspace keeps **Transcription** and **Summary** as independent modules, and each can select local or
 online execution. Online summary presets are available for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok,
-Qwen, and Gemini; the endpoint and model remain editable for compatible regional or custom endpoints.
-Explicitly confirm the destination host before saving. Endpoint and model names are device-local. Until
-native OS credential storage is implemented, the API Key exists
-only in main-process memory for the current application run and must be entered again after restart;
-it is never written to the Vault, SQLite index, device config, or logs.
+Qwen, Gemini, and OpenRouter; the endpoint and model remain editable for compatible regional or custom
+endpoints. Explicitly confirm the destination host before saving. Endpoint and model names are device-local.
+Desktop API credentials are encrypted with Electron `safeStorage` and stored only in the device-data
+directory. Each online provider has an independent credential slot, so switching providers does not
+overwrite another provider's key. Windows uses DPAPI and macOS uses Keychain; if secure OS encryption is unavailable, Oldfolio
+falls back to current-session memory and does not write plaintext. Credentials never enter the Vault,
+SQLite index, WebDAV data, ordinary configuration, or logs, and can be cleared from the settings UI.
 
 ## Online media analysis
 

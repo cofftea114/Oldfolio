@@ -143,9 +143,13 @@ export interface OnlineAISettingsSummary {
   secretRef: string;
   configured: boolean;
   keyAvailable: boolean;
+  keyPersisted: boolean;
+  secureStorageAvailable: boolean;
+  keyAvailablePresets: OnlineSummaryPreset[];
+  keyPersistedPresets: OnlineSummaryPreset[];
 }
 
-export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini';
+export type OnlineSummaryPreset = 'custom' | 'openai' | 'deepseek' | 'kimi' | 'glm' | 'minimax' | 'grok' | 'qwen' | 'gemini' | 'openrouter';
 export type CloudTranscriptionProviderId = 'openai-compatible' | 'tencent-asr';
 
 export const DEFAULT_TENCENT_ASR_ENGINE = '16k_zh' as const;
@@ -174,6 +178,8 @@ export interface CloudTranscriptionSettingsSummary {
   secretRef: string;
   configured: boolean;
   credentialAvailable: boolean;
+  credentialPersisted: boolean;
+  secureStorageAvailable: boolean;
   endpointHost: string;
   inputMode: 'chunks';
 }
@@ -362,10 +368,12 @@ export interface OldfolioDesktopApi {
     apiKey: string;
     hostConfirmed: boolean;
   }): Promise<OnlineAISettingsSummary>;
+  clearOnlineAIKey(preset: OnlineSummaryPreset): Promise<OnlineAISettingsSummary>;
   saveCloudTranscriptionSettings(input:
     | { providerId: 'openai-compatible'; model: string }
     | { providerId: 'tencent-asr'; region: string; engineModelType: TencentASREngineModel; secretId: string; secretKey: string }
   ): Promise<CloudTranscriptionSettingsSummary>;
+  clearCloudTranscriptionCredentials(): Promise<CloudTranscriptionSettingsSummary>;
   prepareAISummary(
     path: string,
     executionTarget: AISummaryExecutionTarget,

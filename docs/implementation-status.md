@@ -73,14 +73,32 @@ claim that the planned 9–12 month v1 is complete.
   are removed, and a deterministic reference list is appended locally. Answers remain L0 and in memory unless
   the user explicitly approves an L1/L2 OKF Q&A change set; saved answers update the bundle index and log.
 - Configure transcription and summary independently for local or online execution. Online summaries
-  provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen, and
-  Gemini. Online transcription supports OpenAI-compatible audio models and Tencent Cloud
+  provide editable OpenAI-compatible presets for OpenAI, DeepSeek, Kimi, GLM, MiniMax, Grok, Qwen,
+  Gemini, and OpenRouter. OpenRouter supports model discovery, defaults zero-credit accounts to the
+  `openrouter/free` router, loads the authenticated `/models` catalog with model names and context lengths,
+  and provides searchable selection while retaining manual model IDs. It keeps `openrouter/auto` and specific
+  paid models as explicit choices, sends attribution headers, and maps its unified reasoning controls for summaries, concepts, and Wiki Q&A.
+  OpenRouter chat completions use bounded SSE reception so long generations keep the connection active and are
+  accepted only after the terminal marker; interrupted partial output is discarded without an automatic paid retry.
+  Remote online AI uses Node's HTTP stack independently from the Chromium `net.fetch` transport retained for
+  long-waiting local LM Studio requests, and safe low-level transport codes are preserved in interruption errors.
+  If a reasoning-mandatory OpenRouter model explicitly rejects `effort: none` with HTTP 400, Oldfolio performs
+  one bounded retry using that model's provider-default reasoning; unrelated client errors are never retried.
+  Other providers explicitly request non-streaming JSON, and empty, truncated, HTML gateway, or unexpected SSE
+  responses are classified without exposing returned content. Provider HTTP 402 responses become actionable
+  insufficient-credit errors. OpenRouter is explicitly excluded
+  from audio transcription because it does not expose the required `/audio/transcriptions` contract.
+  Online transcription supports OpenAI-compatible audio models and Tencent Cloud
   recording-file recognition with signed asynchronous polling. Tencent defaults to the free-package-eligible
   `16k_zh` engine and separates base and paid large-model engines in a validated selector.
   The user must explicitly confirm the summary destination host and can inspect the complete summary
   working document before it is sent. Only endpoints, provider/model settings, and opaque secret references are serialized.
-  The current API Key implementation is deliberately session-only main-process memory: it is cleared
-  on exit and never written to the Vault, SQLite, ordinary config, or logs.
+  Desktop online AI and Tencent credentials are encrypted asynchronously through Electron `safeStorage`
+  and atomically stored in the device-data directory. Online AI credentials use independent provider slots,
+  including automatic migration from the previous single-key slot. Windows uses DPAPI and macOS uses Keychain. Linux
+  persistence is refused when only the insecure `basic_text` backend is available. Decrypted values exist
+  only in main-process memory, can be explicitly cleared, and never enter the Vault, SQLite, WebDAV,
+  ordinary configuration, renderer state, or logs.
 - Validate plugin manifests and broker declared first-party SDK capabilities.
 - Build the Capacitor-compatible mobile capture/read shell.
 
@@ -89,9 +107,8 @@ claim that the planned 9–12 month v1 is complete.
 - WebDAV E2EE object encryption, manifest hash chains, recovery material, and exclusive sync-mode
   state are implemented as tested primitives. A production WebDAV transport, pairing UI, epoch-key
   rotation workflow, and external cryptographic review are still required.
-- The online OpenAI-compatible provider, desktop BYOK settings, transcription, and summary flow are
-  integrated. Persistent BYOK remains disabled until native OS credential stores are connected, so
-  users must re-enter the API Key on each application run.
+- The online OpenAI-compatible provider, desktop BYOK settings, transcription, summary flow, and
+  OS-protected desktop credential persistence are integrated. Mobile Keychain/Keystore integration remains future work.
 - The mobile application is a web/Capacitor shell; native projects, keychain bindings, WebDAV sync,
   background upload behavior, and store packaging remain future work.
 
@@ -106,11 +123,10 @@ claim that the planned 9–12 month v1 is complete.
   evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
 - Production WebDAV transport and folder-sync conflict UI.
-- OS credential-store implementations, installers/signing, SBOM release pipeline, platform policy
-  integrations, accessibility audit, large-vault benchmarks, and mobile native builds.
+- Installers/signing, SBOM release pipeline, platform policy integrations, accessibility audit,
+  large-vault benchmarks, mobile credential storage, and mobile native builds.
 - Processing transcripts above the current 200,000-character safety limit, multi-turn conversational memory,
   and one-click batch concept extraction across multiple transcripts.
 
-The next product increment should connect OS credential stores for persistent OpenAI-compatible BYOK,
-without weakening the current
-payload-disclosure and no-secret-in-Vault boundaries.
+The next product increment should add creator tracking and source refresh scheduling while preserving
+the current payload-disclosure, local-first, and no-secret-in-Vault boundaries.

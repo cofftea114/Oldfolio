@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe('cloud transcription device boundary', () => {
-  it('persists only the Tencent provider configuration and session secret reference', async () => {
+  it('uses a session-only Tencent secret when OS encryption is unavailable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oldfolio-cloud-transcription-'));
     roots.push(root);
     const configPath = join(root, 'cloud-transcription.json');
@@ -37,6 +37,7 @@ describe('cloud transcription device boundary', () => {
 
     expect(configured).toMatchObject({
       providerId: 'tencent-asr', model: '16k_zh', credentialAvailable: true,
+      credentialPersisted: false, secureStorageAvailable: false,
       endpointHost: 'asr.tencentcloudapi.com', inputMode: 'chunks',
     });
     const persisted = await readFile(configPath, 'utf8');

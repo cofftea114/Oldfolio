@@ -140,6 +140,110 @@ describe('AI security boundaries', () => {
     await expect(completion).rejects.not.toThrow(/must-not-be-echoed/u);
   });
 
+  it('turns HTTP 402 into an actionable insufficient-credit error', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: 'Insufficient credits. This account never purchased credits.' },
+    }), { status: 402, headers: { 'content-type': 'application/json' } }));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['models.example.test'] },
+      fetch: fetchMock,
+    });
+
+    const completion = provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://models.example.test/v1/', model: 'paid-model',
+    }, { model: 'paid-model', messages: [{ role: 'user', content: 'hello' }] });
+
+    await expect(completion).rejects.toMatchObject({
+      name: 'AIProviderError',
+      status: 402,
+      code: 'INSUFFICIENT_CREDITS',
+      message: 'AI 服务账户余额不足，或当前模型不属于免费额度。请充值后重试，或切换到服务商提供的免费模型。',
+    });
+  });
+
+  it('classifies a successful non-JSON gateway response without exposing its body', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      '<html><body>gateway trace and private response data</body></html>',
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    ));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['models.example.test'] },
+      fetch: fetchMock,
+    });
+
+    const completion = provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://models.example.test/v1/', model: 'test',
+    }, { model: 'test', messages: [{ role: 'user', content: 'hello' }] });
+
+    await expect(completion).rejects.toMatchObject({
+      name: 'AIProviderError', status: 200, code: 'INVALID_PROVIDER_RESPONSE',
+    });
+    await expect(completion).rejects.toThrow(/网页.*API JSON.*网关/u);
+    await expect(completion).rejects.not.toThrow(/private response data/u);
+    const requestBody = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof requestBody !== 'string') throw new Error('Expected a JSON request body.');
+    expect(JSON.parse(requestBody)).toMatchObject({ stream: false });
+  });
+
+  it('rejects an OpenAI event stream that ends without the terminal marker', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      'data: {"model":"test","choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    ));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['models.example.test'] },
+      fetch: fetchMock,
+      streamChatCompletions: true,
+    });
+
+    const completion = provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://models.example.test/v1/', model: 'test',
+    }, { model: 'test', messages: [{ role: 'user', content: 'hello' }] });
+
+    await expect(completion).rejects.toMatchObject({
+      name: 'AIProviderError', status: 200, code: 'INCOMPLETE_PROVIDER_STREAM',
+    });
+    await expect(completion).rejects.toThrow(/没有正常结束.*丢弃/u);
+    const requestBody = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof requestBody !== 'string') throw new Error('Expected a JSON request body.');
+    expect(JSON.parse(requestBody)).toMatchObject({ stream: true });
+  });
+
+  it('falls back to provider-default reasoning only when OpenRouter rejects disabled reasoning', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' },
+      }), { status: 400, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response([
+        'data: {"model":"reasoning-model","choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const provider = new OpenAICompatibleProvider({
+      endpointPolicy: { confirmedHosts: ['openrouter.example.test'] },
+      fetch: fetchMock,
+      reasoningDialect: 'openrouter',
+      defaultReasoningMode: 'disabled',
+      streamChatCompletions: true,
+    });
+
+    await expect(provider.complete({
+      providerId: 'openai-compatible', endpoint: 'https://openrouter.example.test/v1/', model: 'reasoning-model',
+    }, { model: 'reasoning-model', messages: [{ role: 'user', content: 'summary' }] })).resolves.toMatchObject({
+      content: 'complete', model: 'reasoning-model', finishReason: 'stop',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const rejectedBody = fetchMock.mock.calls[0]?.[1]?.body;
+    const fallbackBody = fetchMock.mock.calls[1]?.[1]?.body;
+    if (typeof rejectedBody !== 'string' || typeof fallbackBody !== 'string') {
+      throw new Error('Expected JSON request bodies.');
+    }
+    expect(JSON.parse(rejectedBody)).toMatchObject({ reasoning: { effort: 'none' }, stream: true });
+    expect(JSON.parse(fallbackBody)).not.toHaveProperty('reasoning');
+  });
+
   it('turns a transport timeout into an actionable local-provider error', async () => {
     const cause = Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' });
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(
