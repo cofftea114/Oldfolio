@@ -72,6 +72,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .source-import button { width: 100%; margin-top: 9px; border: 0; border-radius: 7px; padding: 8px; background: var(--accent); color: white; cursor: pointer; font-size: 11px; }
 .source-import button.secondary { display: flex; align-items: center; justify-content: center; gap: 6px; background: #e5e9e5; color: var(--accent); border: 1px solid #ccd7d0; }
 .source-import button:disabled { opacity: .5; cursor: not-allowed; }
+.creator-help { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.creator-subscriptions { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
+.creator-subscriptions-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; }
+.source-import .creator-subscriptions-heading button { width: auto; margin: 0; padding: 5px 7px; background: #e5e9e5; color: var(--accent); }
+.creator-subscription { margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: white; }
+.source-import .creator-title { width: auto; max-width: 100%; margin: 0; padding: 0; overflow: hidden; background: transparent; color: var(--ink); font-weight: 650; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.creator-subscription small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+.creator-subscription small.creator-new { color: var(--accent); font-weight: 650; }
+.creator-subscription small.creator-error { color: #a3483f; overflow-wrap: anywhere; }
+.creator-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.source-import .creator-actions button { margin-top: 7px; padding: 5px; background: #e5e9e5; color: var(--accent); }
+.creator-actions .creator-unfollow { grid-column: 1 / -1; }
+.creator-history { max-height: 320px; margin-top: 8px; padding-top: 2px; overflow: auto; border-top: 1px solid var(--line); }
+.creator-history-entry { padding: 8px 0; border-bottom: 1px solid #ebe9e1; }
+.creator-history-entry strong { display: block; font-size: 10px; line-height: 1.45; }
+.creator-entry-actions { display: flex; gap: 6px; }
+.source-import .creator-entry-actions button { width: auto; margin-top: 5px; padding: 4px 6px; background: transparent; color: var(--accent); border: 1px solid #ccd7d0; }
 .import-divider { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; color: var(--muted); font-size: 9px; }
 .import-divider::before, .import-divider::after { content: ''; height: 1px; background: var(--line); flex: 1; }
 .media-settings { margin-top: 14px; padding: 12px; border: 1px solid #cfd7d1; border-radius: 10px; background: #f6f8f5; }

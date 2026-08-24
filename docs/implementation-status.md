@@ -16,6 +16,15 @@ claim that the planned 9–12 month v1 is complete.
 - Import RSS, Atom, and Podcast feeds from the desktop UI. The source response is bounded, fetched
   without ambient credentials, treated as untrusted data, and compiled into an immutable OKF
   `Source` snapshot under `bundles/personal/raw/`.
+- Follow RSS, Atom, and Podcast creators from the desktop UI. Each subscription creates an isolated
+  `bundles/creators/<creator-id>/` OKF bundle with a visible Creator profile and immutable raw source
+  revisions. Refresh state is stored in `.oldfolio/config/` so it can follow the Vault across devices;
+  the running desktop checks overdue feeds at startup and every 15 minutes, with a one-hour per-feed
+  interval. Manual single/all refresh, GUID-based new-entry counts, failure state, and unfollow while
+  preserving the knowledge bundle are implemented. The subscription panel can browse the bounded
+  history returned by each Feed, including title, publish time, author, duration, media type, and
+  controlled opening of the original or enclosure URL. Existing subscriptions lazily backfill this
+  catalog on first history access.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.
@@ -119,8 +128,8 @@ claim that the planned 9–12 month v1 is complete.
   local model import, controlled chunked execution, retry workflow, and interruption/disk-pressure
   tests are implemented, but no binary or model is bundled.
 - OCR for burned-in subtitles and bitmap tracks such as PGS, VobSub/DVD, and DVB subtitles.
-- Creator tracking scheduler, comments API/import flows, audience insight clustering, perspective
-  evolution, and cross-creator synthesis.
+- Automatic AI summarization of newly tracked creator items, comments API/import flows, audience
+  insight clustering, perspective evolution, and cross-creator synthesis.
 - JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
 - Production WebDAV transport and folder-sync conflict UI.
 - Installers/signing, SBOM release pipeline, platform policy integrations, accessibility audit,
@@ -128,5 +137,5 @@ claim that the planned 9–12 month v1 is complete.
 - Processing transcripts above the current 200,000-character safety limit, multi-turn conversational memory,
   and one-click batch concept extraction across multiple transcripts.
 
-The next product increment should add creator tracking and source refresh scheduling while preserving
-the current payload-disclosure, local-first, and no-secret-in-Vault boundaries.
+The next product increment should connect newly detected creator entries to the existing media/text
+summary approval pipeline while preserving payload disclosure and explicit AI-write review.

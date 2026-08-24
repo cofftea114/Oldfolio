@@ -1,6 +1,6 @@
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
 import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
@@ -18,6 +18,7 @@ import { AIWikiChatService } from './ai-wiki-chat.js';
 import { importCaptionFile } from './caption-import.js';
 import { DocumentLifecycleService } from './document-lifecycle.js';
 import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './cloud-transcription.js';
+import { CreatorTrackerService } from './creator-tracker.js';
 import { DeviceSecretStore, type SecretEncryption } from './device-secret-store.js';
 import { classifyDocumentPath } from './document-presentation.js';
 import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
@@ -49,6 +50,8 @@ let aiWikiChat: AIWikiChatService | null = null;
 let documentLifecycle: DocumentLifecycleService | null = null;
 let onlineAI: OnlineAIService | null = null;
 let cloudTranscription: CloudTranscriptionService | null = null;
+let creatorTracker: CreatorTrackerService | null = null;
+let creatorRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
@@ -117,6 +120,33 @@ function requireAIWikiChat(): AIWikiChatService {
 function requireDocumentLifecycle(): DocumentLifecycleService {
   if (!documentLifecycle) throw new Error('请先打开一个 Vault');
   return documentLifecycle;
+}
+
+function requireCreatorTracker(): CreatorTrackerService {
+  if (!creatorTracker) throw new Error('请先打开一个 Vault');
+  return creatorTracker;
+}
+
+function stopCreatorRefreshSchedule(): void {
+  if (creatorRefreshTimer) clearInterval(creatorRefreshTimer);
+  creatorRefreshTimer = null;
+}
+
+function startCreatorRefreshSchedule(): void {
+  stopCreatorRefreshSchedule();
+  const tracker = requireCreatorTracker();
+  const target = requireRepository();
+  const refresh = async () => {
+    try {
+      const refreshed = await tracker.refreshDue();
+      if (refreshed.length > 0 && repository === target) await target.rebuildIndex();
+    } catch {
+      // Per-feed failures are persisted for the UI; malformed configuration must not crash the app timer.
+    }
+  };
+  void refresh();
+  creatorRefreshTimer = setInterval(() => void refresh(), 15 * 60 * 1_000);
+  creatorRefreshTimer.unref();
 }
 
 function requireOnlineAI(): OnlineAIService {
@@ -193,6 +223,7 @@ async function readDocument(path: string): Promise<VaultDocument> {
 }
 
 async function openRepository(root: string, initialize: boolean): Promise<VaultSummary> {
+  stopCreatorRefreshSchedule();
   repository?.close();
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
@@ -212,8 +243,10 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
     requireOnlineAI(),
   );
   documentLifecycle = new DocumentLifecycleService(repository);
+  creatorTracker = new CreatorTrackerService(repository, rssConnector);
   await mediaJobs.initialize();
   await repository.rebuildIndex();
+  startCreatorRefreshSchedule();
   const documents = await repository.scanDocuments();
   return { root, name: parse(root).name, documentCount: documents.length };
 }
@@ -359,6 +392,49 @@ function registerIpc(): void {
       snapshotId: result.snapshot.id,
       document: await readDocument(result.document.path),
     };
+  });
+  ipcMain.handle('creator:list', async (event) => {
+    assertTrustedSender(event);
+    return requireCreatorTracker().list();
+  });
+  ipcMain.handle('creator:follow', async (event, url: unknown) => {
+    assertTrustedSender(event);
+    if (typeof url !== 'string' || !url.trim() || url.length > 4_096) throw new TypeError('Invalid creator feed URL');
+    const followed = await requireCreatorTracker().follow(url);
+    await requireRepository().rebuildIndex();
+    return followed;
+  });
+  ipcMain.handle('creator:refresh', async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
+    const refreshed = await requireCreatorTracker().refresh(id);
+    await requireRepository().rebuildIndex();
+    return refreshed;
+  });
+  ipcMain.handle('creator:refresh-all', async (event) => {
+    assertTrustedSender(event);
+    const refreshed = await requireCreatorTracker().refreshAll();
+    await requireRepository().rebuildIndex();
+    return refreshed;
+  });
+  ipcMain.handle('creator:history', async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
+    return requireCreatorTracker().history(id);
+  });
+  ipcMain.handle('creator:open-entry-url', async (event, url: unknown) => {
+    assertTrustedSender(event);
+    if (typeof url !== 'string' || !url || url.length > 4_096) throw new TypeError('Invalid creator entry URL');
+    const target = new URL(url);
+    if ((target.protocol !== 'https:' && target.protocol !== 'http:') || target.username || target.password) {
+      throw new TypeError('Invalid creator entry URL');
+    }
+    await shell.openExternal(target.toString(), { activate: true });
+  });
+  ipcMain.handle('creator:remove', async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
+    return requireCreatorTracker().remove(id);
   });
   ipcMain.handle('media:import-captions', async (event) => {
     assertTrustedSender(event);
@@ -964,7 +1040,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'followCreatorFeed', 'getCreatorHistory', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;
@@ -1061,6 +1137,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopCreatorRefreshSchedule();
   for (const controller of activeMediaTasks) controller.abort(new Error('Oldfolio is closing.'));
   for (const controller of activeAITasks) controller.abort(new Error('Oldfolio is closing.'));
   onlineAI?.clearSessionKey();

@@ -16,6 +16,9 @@ bundles, media-derived notes, and user-controlled AI providers.
 - WebDAV encrypted-sync protocol primitives and mutually exclusive sync modes.
 - Provider contracts for local/BYOK AI.
 - Working RSS/Atom/Podcast and injected local-file ingestion into immutable OKF Source snapshots.
+- Per-creator RSS/Atom/Podcast following with synchronized Vault configuration, immutable refresh
+  snapshots, due checks while the desktop app is running, isolated Creator bundles, and a bounded
+  historical-content browser sourced from the entries actually exposed by each Feed.
 - Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Public HTTPS audio/video direct-link import with bounded streaming download, embedded-subtitle
   preference, resumable online speech transcription, and explicit provider disclosure.

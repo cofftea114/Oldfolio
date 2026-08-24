@@ -38,6 +38,8 @@ import type {
   AISummaryTemplate,
   CloudTranscriptionProviderId,
   CloudTranscriptionSettingsSummary,
+  CreatorFeedEntrySummary,
+  CreatorSubscriptionSummary,
   DocumentSummary,
   MediaJobSummary,
   MediaSettingsSummary,
@@ -104,6 +106,11 @@ function endpointHost(endpoint: string): string {
   }
 }
 
+function displayDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+}
+
 function isPlatformShareUrl(value: string): boolean {
   try {
     const candidate = /https:\/\/[^\s<>"']+/iu.exec(value.trim())?.[0] ?? value;
@@ -130,6 +137,10 @@ export function App() {
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
   const [feedUrl, setFeedUrl] = useState('');
+  const [creatorSubscriptions, setCreatorSubscriptions] = useState<CreatorSubscriptionSummary[]>([]);
+  const [creatorBusyId, setCreatorBusyId] = useState('');
+  const [expandedCreatorId, setExpandedCreatorId] = useState('');
+  const [creatorHistory, setCreatorHistory] = useState<Record<string, CreatorFeedEntrySummary[]>>({});
   const [importError, setImportError] = useState('');
   const [importing, setImporting] = useState(false);
   const [mediaSettings, setMediaSettings] = useState<MediaSettingsSummary | null>(null);
@@ -205,6 +216,10 @@ export function App() {
   const loadDocuments = useCallback(async () => {
     const items = await window.oldfolio.listDocuments();
     setDocuments(items);
+  }, []);
+
+  const loadCreatorSubscriptions = useCallback(async () => {
+    setCreatorSubscriptions(await window.oldfolio.listCreatorSubscriptions());
   }, []);
 
   const openVault = async (create = false) => {
@@ -770,6 +785,127 @@ export function App() {
     }
   };
 
+  const followCreatorFeed = async () => {
+    if (!vault || !feedUrl.trim() || importing) return;
+    setImporting(true);
+    setImportError('');
+    setStatus('正在建立博主知识包…');
+    try {
+      const followed = await window.oldfolio.followCreatorFeed(feedUrl.trim());
+      await Promise.all([loadDocuments(), loadCreatorSubscriptions()]);
+      await openDocument(followed.creatorDocumentPath);
+      setFeedUrl('');
+      setStatus(`已关注 ${followed.title}，并保存首份来源快照`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法关注该 Feed');
+      setStatus('关注失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const refreshCreator = async (id: string) => {
+    if (creatorBusyId) return;
+    setCreatorBusyId(id);
+    setImportError('');
+    try {
+      const refreshed = await window.oldfolio.refreshCreatorSubscription(id);
+      await Promise.all([loadDocuments(), loadCreatorSubscriptions()]);
+      if (expandedCreatorId === id) {
+        const entries = await window.oldfolio.getCreatorHistory(id);
+        setCreatorHistory((current) => ({ ...current, [id]: [...entries] }));
+      }
+      setStatus(refreshed.lastError
+        ? `${refreshed.title} 检查失败：${refreshed.lastError}`
+        : refreshed.lastNewEntryCount > 0
+          ? `${refreshed.title} 发现 ${refreshed.lastNewEntryCount} 条新内容`
+          : `${refreshed.title} 暂无新内容`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法检查更新');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
+  const toggleCreatorHistory = async (id: string) => {
+    if (expandedCreatorId === id) {
+      setExpandedCreatorId('');
+      return;
+    }
+    setExpandedCreatorId(id);
+    if (creatorHistory[id] || creatorBusyId) return;
+    setCreatorBusyId(id);
+    setImportError('');
+    try {
+      const entries = await window.oldfolio.getCreatorHistory(id);
+      setCreatorHistory((current) => ({ ...current, [id]: [...entries] }));
+      await loadCreatorSubscriptions();
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法加载历史内容');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
+  const openCreatorEntryUrl = async (url: string | undefined) => {
+    if (!url) return;
+    setImportError('');
+    try {
+      await window.oldfolio.openCreatorEntryUrl(url);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法打开原链接');
+    }
+  };
+
+  const refreshAllCreators = async () => {
+    if (creatorBusyId || creatorSubscriptions.length === 0) return;
+    setCreatorBusyId('all');
+    setImportError('');
+    try {
+      const refreshed = await window.oldfolio.refreshAllCreatorSubscriptions();
+      await Promise.all([loadDocuments(), loadCreatorSubscriptions()]);
+      const newEntries = refreshed.reduce((total, item) => total + item.lastNewEntryCount, 0);
+      const failures = refreshed.filter((item) => item.lastError).length;
+      setStatus(`已检查 ${refreshed.length} 个关注，发现 ${newEntries} 条新内容${failures ? `，${failures} 个失败` : ''}`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法检查全部更新');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
+  const removeCreator = async (id: string) => {
+    if (creatorBusyId) return;
+    setCreatorBusyId(id);
+    setImportError('');
+    try {
+      setCreatorSubscriptions(await window.oldfolio.removeCreatorSubscription(id));
+      setExpandedCreatorId((current) => current === id ? '' : current);
+      setCreatorHistory((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setStatus('已取消关注；原有 Creator 知识包和来源快照保留');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法取消关注');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
+  const toggleImportPanel = async () => {
+    const next = !importOpen;
+    setImportOpen(next);
+    if (!next || !vault) return;
+    setImportError('');
+    try {
+      await loadCreatorSubscriptions();
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法读取关注列表');
+    }
+  };
+
   const importCaptions = async () => {
     if (!vault || importing) return;
     setImporting(true);
@@ -1111,8 +1247,8 @@ export function App() {
         ><Sparkles /></button>
         <button
           className={importOpen ? 'rail-button active' : 'rail-button'}
-          title="导入 RSS / Podcast"
-          onClick={() => setImportOpen((value) => !value)}
+          title="RSS / Podcast 与博主追踪"
+          onClick={() => void toggleImportPanel()}
         ><Radio /></button>
         <div className="rail-spacer" />
         <button className="rail-button" title="打开 Vault" onClick={() => void openVault(false)}><FolderOpen /></button>
@@ -1150,6 +1286,56 @@ export function App() {
             <button disabled={!vault || !feedUrl.trim() || importing} type="submit">
               {importing ? '正在获取…' : '保存来源快照'}
             </button>
+            <button className="secondary" disabled={!vault || !feedUrl.trim() || importing} onClick={() => void followCreatorFeed()} type="button">
+              <Radio size={14} /> 关注并建立 Creator 知识包
+            </button>
+            <small className="creator-help">应用运行时每 15 分钟检查到期 Feed；每个 Feed 默认间隔 1 小时。新来源保存到独立 Creator Bundle。</small>
+            {creatorSubscriptions.length > 0 && (
+              <div className="creator-subscriptions">
+                <div className="creator-subscriptions-heading">
+                  <strong>已关注 {creatorSubscriptions.length}</strong>
+                  <button disabled={Boolean(creatorBusyId)} onClick={() => void refreshAllCreators()} type="button">检查全部</button>
+                </div>
+                {creatorSubscriptions.map((creator) => (
+                  <article className="creator-subscription" key={creator.id}>
+                    <button className="creator-title" onClick={() => void openDocument(creator.creatorDocumentPath)} type="button">{creator.title}</button>
+                    <small>上次检查：{displayDateTime(creator.lastCheckedAt)}</small>
+                    {creator.lastNewEntryCount > 0 && <small className="creator-new">新增 {creator.lastNewEntryCount} 条</small>}
+                    {creator.lastError && <small className="creator-error">{creator.lastError}</small>}
+                    <div className="creator-actions">
+                      <button disabled={Boolean(creatorBusyId)} onClick={() => void toggleCreatorHistory(creator.id)} type="button">
+                        {expandedCreatorId === creator.id ? '收起历史' : creator.entryCount > 0 ? `历史内容 ${creator.entryCount}` : '加载历史'}
+                      </button>
+                      <button disabled={Boolean(creatorBusyId)} onClick={() => void refreshCreator(creator.id)} type="button">
+                        {creatorBusyId === creator.id ? '检查中…' : '检查更新'}
+                      </button>
+                      <button className="creator-unfollow" disabled={Boolean(creatorBusyId)} onClick={() => void removeCreator(creator.id)} type="button">取消关注</button>
+                    </div>
+                    {expandedCreatorId === creator.id && (
+                      <div className="creator-history">
+                        {creatorBusyId === creator.id && !creatorHistory[creator.id] && <small>正在读取 Feed 历史…</small>}
+                        {creatorHistory[creator.id]?.length === 0 && <small>Feed 没有返回可展示的历史条目。</small>}
+                        {creatorHistory[creator.id]?.map((entry) => (
+                          <article className="creator-history-entry" key={entry.id}>
+                            <strong>{entry.title}</strong>
+                            <small>{[
+                              entry.publishedAt ? displayDateTime(entry.publishedAt) : undefined,
+                              entry.author,
+                              entry.duration ? `时长 ${entry.duration}` : undefined,
+                              entry.mediaType,
+                            ].filter(Boolean).join(' · ')}</small>
+                            <div className="creator-entry-actions">
+                              {entry.link && <button onClick={() => void openCreatorEntryUrl(entry.link)} type="button">打开原内容</button>}
+                              {entry.mediaUrl && <button onClick={() => void openCreatorEntryUrl(entry.mediaUrl)} type="button">打开媒体</button>}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
             <div className="import-divider"><span>或</span></div>
             <button className="secondary" disabled={!vault || importing} onClick={() => void importCaptions()} type="button">
               <Captions size={14} /> 导入 SRT / VTT 字幕

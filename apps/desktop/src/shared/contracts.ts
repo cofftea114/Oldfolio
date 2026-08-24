@@ -40,6 +40,31 @@ export interface FeedImportResult {
   document: VaultDocument;
 }
 
+export interface CreatorSubscriptionSummary {
+  id: string;
+  title: string;
+  feedUrl: string;
+  creatorDocumentPath: string;
+  addedAt: string;
+  lastCheckedAt: string;
+  nextCheckAt: string;
+  lastSnapshotId: string;
+  lastNewEntryCount: number;
+  entryCount: number;
+  lastError?: string;
+}
+
+export interface CreatorFeedEntrySummary {
+  id: string;
+  title: string;
+  link?: string;
+  publishedAt?: string;
+  author?: string;
+  mediaUrl?: string;
+  mediaType?: string;
+  duration?: string;
+}
+
 export interface CaptionImportResult {
   cancelled: boolean;
   createdSource?: boolean;
@@ -326,6 +351,13 @@ export interface OldfolioDesktopApi {
   search(query: string): Promise<SearchHit[]>;
   backlinks(path: string): Promise<DocumentSummary[]>;
   importFeed(url: string): Promise<FeedImportResult>;
+  listCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;
+  followCreatorFeed(url: string): Promise<CreatorSubscriptionSummary>;
+  refreshCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary>;
+  refreshAllCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;
+  getCreatorHistory(id: string): Promise<CreatorFeedEntrySummary[]>;
+  openCreatorEntryUrl(url: string): Promise<void>;
+  removeCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary[]>;
   importCaptions(): Promise<CaptionImportResult>;
   getMediaSettings(): Promise<MediaSettingsSummary>;
   chooseMediaTool(kind: 'ffmpeg' | 'whisper' | 'yt-dlp'): Promise<MediaSettingsSummary>;
