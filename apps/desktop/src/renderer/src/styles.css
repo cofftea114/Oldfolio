@@ -73,6 +73,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .source-import button.secondary { display: flex; align-items: center; justify-content: center; gap: 6px; background: #e5e9e5; color: var(--accent); border: 1px solid #ccd7d0; }
 .source-import button:disabled { opacity: .5; cursor: not-allowed; }
 .creator-help { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.creator-source-result { margin-top: 9px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: white; }
+.creator-source-result.ready { border-color: #a9bcae; background: #f4f8f4; }
+.creator-source-result.official_api_required, .creator-source-result.unsupported { border-color: #d9c8aa; background: #fff9ed; }
+.creator-source-result strong, .creator-source-result small { display: block; }
+.creator-source-result strong { font-size: 10px; }
+.creator-source-result small { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .creator-subscriptions { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
 .creator-subscriptions-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; }
 .source-import .creator-subscriptions-heading button { width: auto; margin: 0; padding: 5px 7px; background: #e5e9e5; color: var(--accent); }

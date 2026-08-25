@@ -65,6 +65,19 @@ export interface CreatorFeedEntrySummary {
   duration?: string;
 }
 
+export interface CreatorSourceResolutionSummary {
+  inputUrl: string;
+  canonicalUrl: string;
+  platform: 'generic' | 'youtube' | 'bilibili' | 'douyin';
+  status: 'ready' | 'official_api_required' | 'unsupported';
+  method: 'direct_feed' | 'homepage_feed' | 'platform_feed' | 'official_api' | 'none';
+  authorization: 'none' | 'api_key_or_oauth' | 'unavailable';
+  feedUrl?: string;
+  title?: string;
+  entryCount?: number;
+  message: string;
+}
+
 export interface CaptionImportResult {
   cancelled: boolean;
   createdSource?: boolean;
@@ -352,6 +365,7 @@ export interface OldfolioDesktopApi {
   backlinks(path: string): Promise<DocumentSummary[]>;
   importFeed(url: string): Promise<FeedImportResult>;
   listCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;
+  probeCreatorSource(url: string): Promise<CreatorSourceResolutionSummary>;
   followCreatorFeed(url: string): Promise<CreatorSubscriptionSummary>;
   refreshCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary>;
   refreshAllCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;

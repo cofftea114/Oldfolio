@@ -25,6 +25,14 @@ claim that the planned 9–12 month v1 is complete.
   history returned by each Feed, including title, publish time, author, duration, media type, and
   controlled opening of the original or enclosure URL. Existing subscriptions lazily backfill this
   catalog on first history access.
+- The creator input accepts homepage and Feed URLs. It performs a bounded, credential-free request,
+  recognizes direct RSS/Atom, and validates declarative alternate-feed links without executing page
+  scripts. YouTube `/channel/UC…` URLs and channel IDs declared in non-executable page metadata are
+  converted to and validated against YouTube's public Atom Feed. The returned entry count is explicitly
+  described as recent Feed history, not complete channel history; complete history still requires the
+  official YouTube Data API uploads-playlist pagination path. Bilibili and Douyin pages without a public
+  Feed report that an approved official-API connector and user authorization are required and do not
+  fall back to page scraping.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.

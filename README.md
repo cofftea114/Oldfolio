@@ -19,6 +19,11 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Per-creator RSS/Atom/Podcast following with synchronized Vault configuration, immutable refresh
   snapshots, due checks while the desktop app is running, isolated Creator bundles, and a bounded
   historical-content browser sourced from the entries actually exposed by each Feed.
+- Creator input accepts either a Feed or homepage. Bounded homepage discovery reads declarative
+  RSS/Atom alternate links without executing scripts. YouTube `/channel/UC…` URLs and declarative
+  channel metadata are resolved to the platform's public Atom Feed; the UI makes clear that this Feed
+  contains recent entries rather than guaranteed complete history. Other platform homepages without a
+  public Feed report the official-API authorization requirement instead of falling back to scraping.
 - Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Public HTTPS audio/video direct-link import with bounded streaming download, embedded-subtitle
   preference, resumable online speech transcription, and explicit provider disclosure.

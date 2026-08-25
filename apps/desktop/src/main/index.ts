@@ -1,7 +1,7 @@
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
-import { IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
+import { CreatorSourceResolver, IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
   MediaJobStore,
@@ -56,6 +56,7 @@ const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
+const creatorSourceResolver = new CreatorSourceResolver();
 const ingestion = new IngestionPipeline([rssConnector]);
 // LM Studio's non-streaming endpoint may not return response headers until a long
 // generation completes. Chromium's network stack avoids Node fetch/Undici's
@@ -397,10 +398,17 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return requireCreatorTracker().list();
   });
+  ipcMain.handle('creator:probe-source', async (event, url: unknown) => {
+    assertTrustedSender(event);
+    if (typeof url !== 'string' || !url.trim() || url.length > 4_096) throw new TypeError('Invalid creator source URL');
+    return creatorSourceResolver.resolve(url);
+  });
   ipcMain.handle('creator:follow', async (event, url: unknown) => {
     assertTrustedSender(event);
     if (typeof url !== 'string' || !url.trim() || url.length > 4_096) throw new TypeError('Invalid creator feed URL');
-    const followed = await requireCreatorTracker().follow(url);
+    const resolution = await creatorSourceResolver.resolve(url);
+    if (resolution.status !== 'ready' || !resolution.feedUrl) throw new Error(resolution.message);
+    const followed = await requireCreatorTracker().follow(resolution.feedUrl);
     await requireRepository().rebuildIndex();
     return followed;
   });
@@ -1040,7 +1048,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'followCreatorFeed', 'getCreatorHistory', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'probeCreatorSource', 'followCreatorFeed', 'getCreatorHistory', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;

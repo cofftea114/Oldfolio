@@ -16,6 +16,7 @@ const api: OldfolioDesktopApi = {
   backlinks: (path) => ipcRenderer.invoke('vault:backlinks', path),
   importFeed: (url) => ipcRenderer.invoke('source:import-feed', url),
   listCreatorSubscriptions: () => ipcRenderer.invoke('creator:list'),
+  probeCreatorSource: (url) => ipcRenderer.invoke('creator:probe-source', url),
   followCreatorFeed: (url) => ipcRenderer.invoke('creator:follow', url),
   refreshCreatorSubscription: (id) => ipcRenderer.invoke('creator:refresh', id),
   refreshAllCreatorSubscriptions: () => ipcRenderer.invoke('creator:refresh-all'),

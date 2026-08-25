@@ -6,6 +6,9 @@ export interface SourceUrlPolicy {
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
   readonly timeoutMs?: number;
+  readonly accept?: string;
+  /** Read only a bounded prefix instead of rejecting an otherwise valid oversized text response. */
+  readonly truncateAtMaxBytes?: boolean;
 }
 
 export interface BoundedTextResponse {
@@ -14,6 +17,7 @@ export interface BoundedTextResponse {
   readonly mimeType?: string;
   readonly etag?: string;
   readonly lastModified?: string;
+  readonly truncated?: boolean;
 }
 
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
@@ -88,23 +92,39 @@ function combineAbortSignals(signal: AbortSignal | undefined, timeoutMs: number)
   };
 }
 
-async function readBounded(response: Response, maxBytes: number): Promise<Uint8Array> {
+async function readBounded(
+  response: Response,
+  maxBytes: number,
+  truncateAtMaxBytes: boolean,
+): Promise<{ readonly bytes: Uint8Array; readonly truncated: boolean }> {
   const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) {
+  if (!truncateAtMaxBytes && Number.isFinite(declared) && declared > maxBytes) {
     throw new Error(`Source response exceeds the ${maxBytes}-byte limit.`);
   }
-  if (!response.body) return new Uint8Array();
+  if (!response.body) return { bytes: new Uint8Array(), truncated: false };
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   while (true) {
     const result = await reader.read();
     if (result.done) break;
-    size += result.value.byteLength;
-    if (size > maxBytes) {
+    const remaining = maxBytes - size;
+    if (result.value.byteLength > remaining) {
       await reader.cancel('response too large');
+      if (truncateAtMaxBytes) {
+        if (remaining > 0) chunks.push(result.value.slice(0, remaining));
+        size = maxBytes;
+        const output = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          output.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return { bytes: output, truncated: true };
+      }
       throw new Error(`Source response exceeds the ${maxBytes}-byte limit.`);
     }
+    size += result.value.byteLength;
     chunks.push(result.value);
   }
   const output = new Uint8Array(size);
@@ -113,7 +133,7 @@ async function readBounded(response: Response, maxBytes: number): Promise<Uint8A
     output.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return output;
+  return { bytes: output, truncated: false };
 }
 
 /** Fetches text without ambient credentials, validating every redirect and bounding memory use. */
@@ -133,7 +153,7 @@ export async function fetchBoundedText(
         credentials: 'omit',
         redirect: 'manual',
         signal: timeout.signal,
-        headers: { Accept: 'application/atom+xml, application/rss+xml, application/xml, text/xml, text/plain;q=0.8' },
+        headers: { Accept: policy.accept ?? 'application/atom+xml, application/rss+xml, application/xml, text/xml, text/plain;q=0.8' },
       });
       if (REDIRECT_STATUSES.has(response.status)) {
         const location = response.headers.get('location');
@@ -143,16 +163,21 @@ export async function fetchBoundedText(
         continue;
       }
       if (!response.ok) throw new Error(`Source request failed with HTTP ${response.status}.`);
-      const bytes = await readBounded(response, policy.maxBytes ?? DEFAULT_MAX_BYTES);
+      const body = await readBounded(
+        response,
+        policy.maxBytes ?? DEFAULT_MAX_BYTES,
+        policy.truncateAtMaxBytes === true,
+      );
       const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim();
       const etag = response.headers.get('etag');
       const lastModified = response.headers.get('last-modified');
       return {
         finalUrl: current.toString(),
-        text: new TextDecoder().decode(bytes),
+        text: new TextDecoder().decode(body.bytes),
         ...(contentType ? { mimeType: contentType } : {}),
         ...(etag ? { etag } : {}),
         ...(lastModified ? { lastModified } : {}),
+        ...(body.truncated ? { truncated: true } : {}),
       };
     }
     throw new Error('Source redirect loop detected.');

@@ -39,6 +39,7 @@ import type {
   CloudTranscriptionProviderId,
   CloudTranscriptionSettingsSummary,
   CreatorFeedEntrySummary,
+  CreatorSourceResolutionSummary,
   CreatorSubscriptionSummary,
   DocumentSummary,
   MediaJobSummary,
@@ -137,6 +138,7 @@ export function App() {
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
   const [feedUrl, setFeedUrl] = useState('');
+  const [creatorSourceResolution, setCreatorSourceResolution] = useState<CreatorSourceResolutionSummary | null>(null);
   const [creatorSubscriptions, setCreatorSubscriptions] = useState<CreatorSubscriptionSummary[]>([]);
   const [creatorBusyId, setCreatorBusyId] = useState('');
   const [expandedCreatorId, setExpandedCreatorId] = useState('');
@@ -764,19 +766,35 @@ export function App() {
     }
   };
 
-  const importFeed = async (event: FormEvent<HTMLFormElement>) => {
+  const probeCreatorSource = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!vault || !feedUrl.trim() || importing) return;
     setImporting(true);
     setImportError('');
+    setStatus('正在检测博主主页与订阅能力…');
+    try {
+      const resolution = await window.oldfolio.probeCreatorSource(feedUrl.trim());
+      setCreatorSourceResolution(resolution);
+      setStatus(resolution.status === 'ready' ? '已找到可用订阅通道' : '当前主页需要额外连接器能力');
+    } catch (error: unknown) {
+      setCreatorSourceResolution(null);
+      setImportError(error instanceof Error ? error.message : '无法检测该主页或 Feed');
+      setStatus('博主来源检测失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const importFeed = async () => {
+    if (!vault || creatorSourceResolution?.status !== 'ready' || !creatorSourceResolution.feedUrl || importing) return;
+    setImporting(true);
+    setImportError('');
     setStatus('正在导入订阅…');
     try {
-      const result = await window.oldfolio.importFeed(feedUrl.trim());
+      const result = await window.oldfolio.importFeed(creatorSourceResolution.feedUrl);
       await loadDocuments();
       await openDocument(result.document.path);
       setStatus(result.created ? '来源快照已保存' : '来源快照已存在');
-      setFeedUrl('');
-      setImportOpen(false);
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '无法导入该订阅');
       setStatus('导入失败');
@@ -795,6 +813,7 @@ export function App() {
       await Promise.all([loadDocuments(), loadCreatorSubscriptions()]);
       await openDocument(followed.creatorDocumentPath);
       setFeedUrl('');
+      setCreatorSourceResolution(null);
       setStatus(`已关注 ${followed.title}，并保存首份来源快照`);
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '无法关注该 Feed');
@@ -1272,21 +1291,31 @@ export function App() {
           </div>
         )}
         {importOpen && (
-          <form className="source-import" onSubmit={(event) => void importFeed(event)}>
-            <div className="section-label"><Radio size={14} /> 导入 RSS / Podcast</div>
+          <form className="source-import" onSubmit={(event) => void probeCreatorSource(event)}>
+            <div className="section-label"><Radio size={14} /> 关注博主与订阅</div>
             <input
-              aria-label="订阅地址"
+              aria-label="博主主页或订阅地址"
               disabled={!vault || importing}
-              onChange={(event) => setFeedUrl(event.target.value)}
-              placeholder={vault ? 'https://example.com/feed.xml' : '请先打开 Vault'}
+              onChange={(event) => { setFeedUrl(event.target.value); setCreatorSourceResolution(null); }}
+              placeholder={vault ? '博主主页或 RSS / Atom / Podcast Feed' : '请先打开 Vault'}
               type="url"
               value={feedUrl}
             />
             {importError && <p role="alert">{importError}</p>}
             <button disabled={!vault || !feedUrl.trim() || importing} type="submit">
-              {importing ? '正在获取…' : '保存来源快照'}
+              {importing ? '正在检测…' : '检测主页 / Feed 能力'}
             </button>
-            <button className="secondary" disabled={!vault || !feedUrl.trim() || importing} onClick={() => void followCreatorFeed()} type="button">
+            {creatorSourceResolution && (
+              <div className={`creator-source-result ${creatorSourceResolution.status}`}>
+                <strong>{creatorSourceResolution.title ?? ({ youtube: 'YouTube', bilibili: '哔哩哔哩', douyin: '抖音', generic: '通用主页' }[creatorSourceResolution.platform])}</strong>
+                <small>{creatorSourceResolution.message}</small>
+                <small>通道：{{ direct_feed: '直接 Feed', homepage_feed: '主页发现 Feed', platform_feed: '平台公开 Feed', official_api: '官方 API', none: '无可用通道' }[creatorSourceResolution.method]}{creatorSourceResolution.entryCount !== undefined ? ` · 当前返回 ${creatorSourceResolution.entryCount} 条` : ''}</small>
+              </div>
+            )}
+            <button disabled={creatorSourceResolution?.status !== 'ready' || importing} onClick={() => void importFeed()} type="button">
+              仅保存一次性来源快照
+            </button>
+            <button className="secondary" disabled={creatorSourceResolution?.status !== 'ready' || importing} onClick={() => void followCreatorFeed()} type="button">
               <Radio size={14} /> 关注并建立 Creator 知识包
             </button>
             <small className="creator-help">应用运行时每 15 分钟检查到期 Feed；每个 Feed 默认间隔 1 小时。新来源保存到独立 Creator Bundle。</small>

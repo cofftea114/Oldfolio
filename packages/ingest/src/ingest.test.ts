@@ -114,5 +114,10 @@ describe('remote source boundary', () => {
     await expect(fetchBoundedText('https://example.com/feed', oversized, { maxBytes: 4 })).rejects.toThrow(
       /exceeds/,
     );
+
+    await expect(fetchBoundedText('https://example.com/page', oversized, {
+      maxBytes: 4,
+      truncateAtMaxBytes: true,
+    })).resolves.toMatchObject({ text: '1234', truncated: true });
   });
 });
