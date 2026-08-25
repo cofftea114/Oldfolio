@@ -18,7 +18,7 @@ import {
 import type { AITranscriptionResult, SourceSnapshot } from '@oldfolio/domain';
 import type { VaultRepository } from '@oldfolio/vault';
 
-import { resolveVerifiedAsset, type TranscribeMediaFileResult } from './media-transcription.js';
+import { resolveVerifiedAsset, validatedMediaBundleRoot, type TranscribeMediaFileResult } from './media-transcription.js';
 import type { CloudTranscriptionService } from './cloud-transcription.js';
 import { downloadRemoteMediaAsset } from './remote-media.js';
 import { writeConceptOnce } from './write-concept.js';
@@ -32,12 +32,20 @@ export interface OnlineMediaTranscriptionOptions {
   readonly signal?: AbortSignal;
 }
 
+interface CreatorMediaTargetInput {
+  readonly sourceTitle?: string;
+  readonly targetBundleRoot?: string;
+  readonly creatorId?: string;
+  readonly creatorTitle?: string;
+  readonly creatorEntryId?: string;
+}
+
 export async function transcribeOnlineMediaUrl(
   repository: VaultRepository,
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
   cloudTranscription: CloudTranscriptionService,
-  input: { readonly url: string; readonly language?: string },
+  input: { readonly url: string; readonly language?: string } & CreatorMediaTargetInput,
   options: OnlineMediaTranscriptionOptions = {},
 ): Promise<TranscribeMediaFileResult> {
   const config = await deviceConfig.load();
@@ -53,7 +61,7 @@ export async function transcribeOnlineMediaUrl(
     request: {
       kind: 'online_transcription',
       sourceKind: 'remote-url',
-      sourceTitle: asset.originalName,
+      sourceTitle: input.sourceTitle?.trim() || asset.originalName,
       importedFrom: asset.finalUrl,
       providerId: runtime.config.providerId as 'openai-compatible' | 'tencent-asr',
       endpointHost: runtime.host,
@@ -62,6 +70,10 @@ export async function transcribeOnlineMediaUrl(
       inputMode: runtime.inputMode,
       ...(input.language ? { language: input.language } : {}),
       chunkDurationMs: ONLINE_CHUNK_DURATION_MS,
+      ...(input.targetBundleRoot ? { targetBundleRoot: validatedMediaBundleRoot(input.targetBundleRoot) } : {}),
+      ...(input.creatorId ? { creatorId: input.creatorId } : {}),
+      ...(input.creatorTitle ? { creatorTitle: input.creatorTitle } : {}),
+      ...(input.creatorEntryId ? { creatorEntryId: input.creatorEntryId } : {}),
     },
   });
   return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
@@ -72,7 +84,7 @@ export async function transcribeCloudMediaFile(
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
   cloudTranscription: CloudTranscriptionService,
-  input: { readonly mediaPath: string; readonly importedFrom?: string; readonly language?: string },
+  input: { readonly mediaPath: string; readonly importedFrom?: string; readonly language?: string } & CreatorMediaTargetInput,
   options: OnlineMediaTranscriptionOptions = {},
 ): Promise<TranscribeMediaFileResult> {
   const config = await deviceConfig.load();
@@ -85,7 +97,7 @@ export async function transcribeCloudMediaFile(
     request: {
       kind: 'online_transcription',
       sourceKind: input.importedFrom ? 'remote-url' : 'local-file',
-      sourceTitle: asset.originalName,
+      sourceTitle: input.sourceTitle?.trim() || asset.originalName,
       importedFrom: input.importedFrom ?? input.mediaPath,
       providerId: runtime.config.providerId as 'openai-compatible' | 'tencent-asr',
       endpointHost: runtime.host,
@@ -94,6 +106,10 @@ export async function transcribeCloudMediaFile(
       inputMode: runtime.inputMode,
       ...(input.language ? { language: input.language } : {}),
       chunkDurationMs: ONLINE_CHUNK_DURATION_MS,
+      ...(input.targetBundleRoot ? { targetBundleRoot: validatedMediaBundleRoot(input.targetBundleRoot) } : {}),
+      ...(input.creatorId ? { creatorId: input.creatorId } : {}),
+      ...(input.creatorTitle ? { creatorTitle: input.creatorTitle } : {}),
+      ...(input.creatorEntryId ? { creatorEntryId: input.creatorEntryId } : {}),
     },
   });
   return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
@@ -197,6 +213,7 @@ export async function resumeOnlineMediaTranscription(
     await jobs.checkpoint(job.id, 'compiling', 0.85, { transcriptSegments: transcript.segments });
     const fetchedAt = now().toISOString();
     const sourceId = `media-${job.sourceHash}`;
+    const targetBundleRoot = validatedMediaBundleRoot(request.targetBundleRoot);
     const localSource = request.sourceKind === 'local-file';
     const snapshot: SourceSnapshot = {
       id: sourceId,
@@ -220,10 +237,13 @@ export async function resumeOnlineMediaTranscription(
           ...(track.language ? { language: track.language } : {}),
         })),
         ...(selectedSubtitleTrack === undefined ? {} : { selectedSubtitleTrack }),
+        ...(request.creatorId ? { creatorId: request.creatorId } : {}),
+        ...(request.creatorTitle ? { creatorTitle: request.creatorTitle } : {}),
+        ...(request.creatorEntryId ? { creatorEntryId: request.creatorEntryId } : {}),
       },
       deletionPolicy: { supportsRemoteDeletionSignals: false },
     };
-    const source = compileSourceDocument(snapshot);
+    const source = compileSourceDocument(snapshot, { bundleRoot: targetBundleRoot });
     const createdSource = await writeConceptOnce(repository, source.path, source.content, sourceId);
     const compiled = compileTranscriptDocument({
       sourceId,
@@ -233,6 +253,10 @@ export async function resumeOnlineMediaTranscription(
       transcript,
       generatedAt: fetchedAt,
       generator,
+      bundleRoot: targetBundleRoot,
+      ...(request.creatorId ? { creatorId: request.creatorId } : {}),
+      ...(request.creatorTitle ? { creatorTitle: request.creatorTitle } : {}),
+      ...(request.creatorEntryId ? { creatorEntryId: request.creatorEntryId } : {}),
     });
     const createdTranscript = await writeConceptOnce(repository, compiled.path, compiled.content, compiled.id);
     await jobs.checkpoint(job.id, 'completed', 1, { artifactPath: compiled.path, transcriptSegments: transcript.segments });

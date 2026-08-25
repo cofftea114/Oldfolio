@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ProcessRunner } from '@oldfolio/media';
+import { ControlledProcessError, type ProcessRunner } from '@oldfolio/media';
 
 import { detectPlatformMediaUrl, downloadPlatformMedia } from './platform-media.js';
 
@@ -60,5 +60,43 @@ describe('platform share media boundary', () => {
       ytDlpPath: 'C:/tools/yt-dlp.exe', ffmpegPath: 'C:/tools/ffmpeg.exe', cacheRoot: root,
       authorizationConfirmed: false,
     })).rejects.toThrow(/有权/u);
+  });
+
+  it('surfaces a bounded actionable yt-dlp failure instead of only the process exit code', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-platform-failure-'));
+    roots.push(root);
+    const run = vi.fn<ProcessRunner>(() => Promise.reject(new ControlledProcessError(
+      'Process exited with code 1.',
+      'nonzero_exit',
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr: '\u001b[31mERROR: [youtube] abc123: Sign in to confirm you’re not a bot. Use --cookies-from-browser.\u001b[0m',
+      },
+    )));
+
+    await expect(downloadPlatformMedia('https://www.youtube.com/watch?v=abc123', {
+      ytDlpPath: 'C:/tools/yt-dlp.exe',
+      ffmpegPath: 'C:/tools/ffmpeg.exe',
+      cacheRoot: root,
+      authorizationConfirmed: true,
+    }, { run })).rejects.toThrow('平台要求登录或人机验证');
+  });
+
+  it('explains that browser playback does not grant a cookie-free media request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-platform-forbidden-'));
+    roots.push(root);
+    const run = vi.fn<ProcessRunner>(() => Promise.reject(new ControlledProcessError(
+      'Process exited with code 1.',
+      'nonzero_exit',
+      { exitCode: 1, stdout: '', stderr: 'ERROR: unable to download video data: HTTP Error 403: Forbidden' },
+    )));
+
+    await expect(downloadPlatformMedia('https://www.youtube.com/watch?v=abc123', {
+      ytDlpPath: 'C:/tools/yt-dlp.exe',
+      ffmpegPath: 'C:/tools/ffmpeg.exe',
+      cacheRoot: root,
+      authorizationConfirmed: true,
+    }, { run })).rejects.toThrow('即使浏览器可以播放');
   });
 });

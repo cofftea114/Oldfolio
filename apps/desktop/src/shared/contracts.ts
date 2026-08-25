@@ -69,6 +69,44 @@ export interface CreatorFeedEntrySummary {
   duration?: string;
 }
 
+export interface CreatorTitleGraphNodeSummary {
+  id: string;
+  title: string;
+  url?: string;
+  publishedAt?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color?: string;
+}
+
+export interface CreatorTitleGraphEdgeSummary {
+  id: string;
+  fromNode: string;
+  toNode: string;
+  score: number;
+  terms: readonly string[];
+  color?: string;
+}
+
+export interface CreatorTitleGraphSummary {
+  creatorId: string;
+  creatorTitle: string;
+  path: string;
+  generatedAt: string;
+  nodeCount: number;
+  edgeCount: number;
+  relatedNodeCount: number;
+  nodes: readonly CreatorTitleGraphNodeSummary[];
+  edges: readonly CreatorTitleGraphEdgeSummary[];
+}
+
+export interface CreatorMediaContextInput {
+  creatorId: string;
+  creatorEntryId: string;
+}
+
 export interface CreatorSourceResolutionSummary {
   inputUrl: string;
   canonicalUrl: string;
@@ -381,6 +419,7 @@ export interface OldfolioDesktopApi {
   refreshCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary>;
   refreshAllCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;
   getCreatorHistory(id: string): Promise<CreatorFeedEntrySummary[]>;
+  generateCreatorTitleGraph(id: string): Promise<CreatorTitleGraphSummary>;
   getYouTubeCreatorApiSettings(): Promise<YouTubeCreatorApiSettingsSummary>;
   saveYouTubeCreatorApiSettings(apiKey: string): Promise<YouTubeCreatorApiSettingsSummary>;
   clearYouTubeCreatorApiKey(): Promise<YouTubeCreatorApiSettingsSummary>;
@@ -398,9 +437,22 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
-  transcribeOnlineMediaLocally(input: { url: string; modelId: string; language?: string; platformAccessConfirmed: boolean }): Promise<MediaTranscriptionResult>;
+  transcribeOnlineMediaLocally(input: {
+    url: string;
+    modelId: string;
+    language?: string;
+    platformAccessConfirmed: boolean;
+    creatorId?: string;
+    creatorEntryId?: string;
+  }): Promise<MediaTranscriptionResult>;
   transcribeCloudMedia(input: { language?: string }): Promise<MediaTranscriptionResult>;
-  transcribeOnlineMedia(input: { url: string; language?: string; platformAccessConfirmed?: boolean }): Promise<MediaTranscriptionResult>;
+  transcribeOnlineMedia(input: {
+    url: string;
+    language?: string;
+    platformAccessConfirmed?: boolean;
+    creatorId?: string;
+    creatorEntryId?: string;
+  }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
   deleteMediaJob(jobId: string): Promise<{ cancelled: boolean }>;
   listMediaJobs(): Promise<MediaJobSummary[]>;

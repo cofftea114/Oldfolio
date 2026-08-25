@@ -50,6 +50,11 @@ describe('desktop local media transcription', () => {
       vaultRoot,
       modelId: 'tiny',
       language: 'zh',
+      sourceTitle: '博主视频',
+      targetBundleRoot: 'bundles/creators/creator-0123456789abcdef',
+      creatorId: 'creator-0123456789abcdef',
+      creatorTitle: '测试博主',
+      creatorEntryId: 'yt:video:one',
     }, {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       run: async (request) => {
@@ -70,8 +75,11 @@ describe('desktop local media transcription', () => {
     expect(calls.some((args) => args.includes('-ovtt'))).toBe(true);
     expect(await readFile(join(vaultRoot, ...result.assetPath.split('/')), 'utf8')).toBe('fake audio');
     const transcript = await vault.read(result.transcriptPath);
-    expect(parseOkfDocument(transcript.text, result.transcriptPath.replace('bundles/personal/', '')).valid).toBe(true);
+    expect(result.transcriptPath).toMatch(/^bundles\/creators\/creator-0123456789abcdef\/wiki\/transcripts\//u);
+    expect(result.sourcePath).toMatch(/^bundles\/creators\/creator-0123456789abcdef\/raw\//u);
+    expect(parseOkfDocument(transcript.text, result.transcriptPath.replace('bundles/creators/creator-0123456789abcdef/', '')).valid).toBe(true);
     expect(transcript.text).toContain('知识应当可追溯。');
+    expect(transcript.text).toContain('creator_entry_id: yt:video:one');
     expect((await jobs.get(result.jobId)).stage).toBe('completed');
     vault.close();
   });

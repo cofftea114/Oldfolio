@@ -30,6 +30,10 @@ export interface LocalMediaTranscriptionRequest {
   readonly modelHash: ContentHash;
   readonly language?: string;
   readonly chunkDurationMs: number;
+  readonly targetBundleRoot?: VaultPath;
+  readonly creatorId?: string;
+  readonly creatorTitle?: string;
+  readonly creatorEntryId?: string;
 }
 
 export interface OnlineMediaTranscriptionRequest {
@@ -44,6 +48,10 @@ export interface OnlineMediaTranscriptionRequest {
   readonly inputMode: 'chunks';
   readonly language?: string;
   readonly chunkDurationMs: number;
+  readonly targetBundleRoot?: VaultPath;
+  readonly creatorId?: string;
+  readonly creatorTitle?: string;
+  readonly creatorEntryId?: string;
 }
 
 export type MediaTranscriptionRequest = LocalMediaTranscriptionRequest | OnlineMediaTranscriptionRequest;

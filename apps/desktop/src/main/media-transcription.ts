@@ -33,6 +33,11 @@ export interface TranscribeMediaFileInput {
   readonly modelId: string;
   readonly importedFrom?: string;
   readonly language?: string;
+  readonly sourceTitle?: string;
+  readonly targetBundleRoot?: string;
+  readonly creatorId?: string;
+  readonly creatorTitle?: string;
+  readonly creatorEntryId?: string;
 }
 
 export interface TranscribeMediaFileResult {
@@ -55,6 +60,12 @@ function modelById(models: readonly InstalledLocalModel[], id: string): Installe
   const model = models.find((candidate) => candidate.id === id);
   if (!model) throw new Error(`本机未安装模型：${id}`);
   return model;
+}
+
+export function validatedMediaBundleRoot(value: string | undefined): string {
+  const root = value ?? 'bundles/personal';
+  if (!/^bundles\/(?:personal|creators\/creator-[a-f0-9]{16})$/u.test(root)) throw new Error('媒体任务目标知识包无效。');
+  return root;
 }
 
 async function hashFile(path: string): Promise<string> {
@@ -177,6 +188,7 @@ export async function resumeMediaTranscription(
     await jobs.checkpoint(job.id, 'compiling', 0.85, { transcriptSegments: transcript.segments });
     const fetchedAt = now().toISOString();
     const sourceId = `media-${job.sourceHash}`;
+    const targetBundleRoot = validatedMediaBundleRoot(request.targetBundleRoot);
     const remoteSource = request.importedFrom?.startsWith('https://') === true;
     const snapshot: SourceSnapshot = {
       id: sourceId,
@@ -197,10 +209,13 @@ export async function resumeMediaTranscription(
           ...(track.language ? { language: track.language } : {}),
         })),
         ...(extractedSubtitleTrack ? { selectedSubtitleTrack: extractedSubtitleTrack.index } : {}),
+        ...(request.creatorId ? { creatorId: request.creatorId } : {}),
+        ...(request.creatorTitle ? { creatorTitle: request.creatorTitle } : {}),
+        ...(request.creatorEntryId ? { creatorEntryId: request.creatorEntryId } : {}),
       },
       deletionPolicy: { supportsRemoteDeletionSignals: false },
     };
-    const source = compileSourceDocument(snapshot);
+    const source = compileSourceDocument(snapshot, { bundleRoot: targetBundleRoot });
     const createdSource = await writeConceptOnce(repository, source.path, source.content, sourceId);
     const compiled = compileTranscriptDocument({
       sourceId,
@@ -210,6 +225,10 @@ export async function resumeMediaTranscription(
       transcript,
       generatedAt: fetchedAt,
       generator,
+      bundleRoot: targetBundleRoot,
+      ...(request.creatorId ? { creatorId: request.creatorId } : {}),
+      ...(request.creatorTitle ? { creatorTitle: request.creatorTitle } : {}),
+      ...(request.creatorEntryId ? { creatorEntryId: request.creatorEntryId } : {}),
     });
     const createdTranscript = await writeConceptOnce(repository, compiled.path, compiled.content, compiled.id);
     await jobs.checkpoint(job.id, 'completed', 1, { artifactPath: compiled.path, transcriptSegments: transcript.segments });
@@ -249,12 +268,16 @@ export async function transcribeMediaFile(
     sourceHash: asset.contentHash,
     request: {
       kind: 'local_transcription',
-      sourceTitle: asset.originalName,
+      sourceTitle: input.sourceTitle?.trim() || asset.originalName,
       importedFrom: input.importedFrom ?? input.mediaPath,
       modelId: model.id,
       modelHash: model.sha256,
       ...(input.language ? { language: input.language } : {}),
       chunkDurationMs: CHUNK_DURATION_MS,
+      ...(input.targetBundleRoot ? { targetBundleRoot: validatedMediaBundleRoot(input.targetBundleRoot) } : {}),
+      ...(input.creatorId ? { creatorId: input.creatorId } : {}),
+      ...(input.creatorTitle ? { creatorTitle: input.creatorTitle } : {}),
+      ...(input.creatorEntryId ? { creatorEntryId: input.creatorEntryId } : {}),
     },
   });
   return resumeMediaTranscription(repository, jobs, deviceConfig, job.id, options);

@@ -162,6 +162,38 @@ async function resolveCreatorSource(url: string) {
   }
 }
 
+async function resolveCreatorMediaTarget(
+  sourceUrl: string,
+  creatorId: unknown,
+  creatorEntryId: unknown,
+): Promise<{
+  readonly sourceTitle: string;
+  readonly targetBundleRoot: string;
+  readonly creatorId: string;
+  readonly creatorTitle: string;
+  readonly creatorEntryId: string;
+} | undefined> {
+  if (creatorId === undefined && creatorEntryId === undefined) return undefined;
+  if (
+    typeof creatorId !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(creatorId)
+    || typeof creatorEntryId !== 'string' || !creatorEntryId.trim() || creatorEntryId.length > 4_096
+  ) throw new TypeError('Invalid creator media context');
+  const creator = (await requireCreatorTracker().list()).find((item) => item.id === creatorId);
+  if (!creator) throw new Error('未找到该博主关注。');
+  const entry = (await requireCreatorTracker().history(creatorId)).find((item) => item.id === creatorEntryId);
+  if (!entry) throw new Error('未找到该博主的历史内容。');
+  const normalizedSource = new URL(sourceUrl).toString();
+  const allowed = [entry.link, entry.mediaUrl].filter((value): value is string => Boolean(value)).map((value) => new URL(value).toString());
+  if (!allowed.includes(normalizedSource)) throw new Error('媒体地址与所选博主历史条目不一致。');
+  return {
+    sourceTitle: entry.title,
+    targetBundleRoot: `bundles/creators/${creator.id}`,
+    creatorId: creator.id,
+    creatorTitle: creator.title,
+    creatorEntryId: entry.id,
+  };
+}
+
 function stopCreatorRefreshSchedule(): void {
   if (creatorRefreshTimer) clearInterval(creatorRefreshTimer);
   creatorRefreshTimer = null;
@@ -464,6 +496,13 @@ function registerIpc(): void {
     if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
     return requireCreatorTracker().history(id);
   });
+  ipcMain.handle('creator:generate-title-graph', async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
+    const graph = await requireCreatorTracker().generateTitleGraph(id);
+    await requireRepository().rebuildIndex();
+    return graph;
+  });
   ipcMain.handle('creator:get-youtube-api-settings', (event) => {
     assertTrustedSender(event);
     return requireYouTubeCreatorApi().settings();
@@ -626,6 +665,7 @@ function registerIpc(): void {
     activeMediaTasks.add(controller);
     try {
       const sourceUrl = extractSharedMediaUrl(value.url);
+      const creatorTarget = await resolveCreatorMediaTarget(sourceUrl, value.creatorId, value.creatorEntryId);
       const platform = detectPlatformMediaUrl(sourceUrl);
       let temporaryDirectory: string | undefined;
       let result: Awaited<ReturnType<typeof transcribeOnlineMediaUrl>>;
@@ -645,6 +685,7 @@ function registerIpc(): void {
             {
               mediaPath: downloaded.mediaPath,
               importedFrom: downloaded.sourceUrl,
+              ...(creatorTarget ?? {}),
               ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
             },
             { signal: controller.signal },
@@ -654,6 +695,7 @@ function registerIpc(): void {
             requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(),
             {
               url: sourceUrl,
+              ...(creatorTarget ?? {}),
               ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
             },
             { fetcher: chromiumNetworkFetch, signal: controller.signal },
@@ -686,6 +728,7 @@ function registerIpc(): void {
     let temporaryDirectory: string | undefined;
     try {
       const sourceUrl = extractSharedMediaUrl(value.url);
+      const creatorTarget = await resolveCreatorMediaTarget(sourceUrl, value.creatorId, value.creatorEntryId);
       const platform = detectPlatformMediaUrl(sourceUrl);
       let mediaPath: string;
       if (platform) {
@@ -709,6 +752,7 @@ function registerIpc(): void {
         vaultRoot: requireRepository().root,
         modelId: value.modelId,
         importedFrom: sourceUrl,
+        ...(creatorTarget ?? {}),
         ...(typeof value.language === 'string' && value.language.trim() ? { language: value.language.trim() } : {}),
       }, { signal: controller.signal });
       return {
@@ -1105,7 +1149,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'probeCreatorSource', 'followCreatorFeed', 'getCreatorHistory', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'probeCreatorSource', 'followCreatorFeed', 'getCreatorHistory', 'generateCreatorTitleGraph', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;

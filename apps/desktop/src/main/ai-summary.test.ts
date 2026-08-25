@@ -354,4 +354,75 @@ ${generation === 1 ? '离线仍可工作。' : '离线可工作，并通过显�
     expect((await vault.read('bundles/personal/index.md')).text.match(/\|本地优先\]\]/gu)).toHaveLength(1);
     vault.close();
   });
+
+  it('keeps creator transcripts, summaries, concepts, index entries, and logs in the same creator bundle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-ai-creator-bundle-'));
+    roots.push(root);
+    const vault = await VaultRepository.open(join(root, 'vault'));
+    await vault.initialize();
+    const bundleRoot = 'bundles/creators/creator-0123456789abcdef';
+    await vault.write(`${bundleRoot}/index.md`, '# 测试博主\n', null);
+    await vault.write(`${bundleRoot}/log.md`, '# Change log\n', null);
+    const transcript = compileTranscriptDocument({
+      sourceId: 'source-creator-video',
+      sourceHash: sha256('source-creator-video'),
+      sourceResource: 'assets/media/creator-video.mp4',
+      sourceTitle: '创作者历史视频',
+      bundleRoot,
+      creatorId: 'creator-0123456789abcdef',
+      creatorTitle: '测试博主',
+      creatorEntryId: 'entry-video-1',
+      transcript: {
+        text: '本地知识文件应当是权威状态。',
+        segments: [{ startMs: 0, endMs: 3_000, text: '本地知识文件应当是权威状态。' }],
+      },
+      generatedAt: '2026-08-25T00:00:00.000Z',
+      generator: 'test',
+    });
+    await vault.write(transcript.path, transcript.content, null);
+    const store = new AIDeviceConfigStore(join(root, 'ai.json'));
+    await store.save({ version: 1, providerId: 'ollama', endpoint: 'http://127.0.0.1:11434/api/', model: 'test' });
+    const provider: AIProvider = {
+      id: 'ollama', displayName: 'Fake', capabilities: ['chat'], listModels: () => Promise.resolve([]),
+      complete: (_config, request) => {
+        const prompt = request.messages.map((message) => message.content).join('\n');
+        return Promise.resolve({
+          content: prompt.includes('# 概念候选')
+            ? `# 概念候选
+## 本地权威状态
+### 摘要
+知识文件以本地副本为权威。
+### 实体
+[[${transcript.path}|创作者历史视频]]
+### 概念
+用户可直接读取和迁移自己的知识。
+### 对比
+区别于仅保存在服务端的知识。
+### 概述与综合
+创作者强调了本地优先的长期可控性。`
+            : '# 创作者历史视频摘要\n\n## 核心观点\n\n本地知识文件应当是用户可直接控制的权威状态。',
+          model: 'test', finishReason: 'stop', usage: { inputTokens: 80, outputTokens: 50 },
+        });
+      },
+    };
+    const service = new AISummaryService(vault, store, provider, () => new Date('2026-08-25T01:00:00.000Z'));
+
+    const summaryPreparation = await service.prepare(transcript.path);
+    const summaryPending = await service.generate(
+      transcript.path,
+      summaryPreparation.sourceRevision,
+      summaryPreparation.suggestedTemplate,
+    );
+    expect(summaryPending.targetPath).toMatch(/^bundles\/creators\/creator-0123456789abcdef\/wiki\/summaries\//u);
+    const summaryApplied = await service.apply(summaryPending.id);
+
+    const conceptPreparation = await service.prepareConcepts(summaryApplied.targetPath);
+    const conceptPending = await service.generateConcepts(summaryApplied.targetPath, conceptPreparation.sourceRevision);
+    const conceptApplied = await service.apply(conceptPending.id);
+    expect(conceptApplied.targetPath).toMatch(/^bundles\/creators\/creator-0123456789abcdef\/wiki\/concepts\//u);
+    expect((await vault.read(`${bundleRoot}/index.md`)).text).toContain(`[[${conceptApplied.targetPath}|本地权威状态]]`);
+    expect((await vault.read(`${bundleRoot}/log.md`)).text).toContain('创建概念：本地权威状态');
+    expect((await vault.read('bundles/personal/index.md')).text).not.toContain('本地权威状态');
+    vault.close();
+  });
 });

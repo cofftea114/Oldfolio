@@ -10,6 +10,10 @@ export interface CompileTranscriptInput {
   readonly transcript: AITranscriptionResult;
   readonly generatedAt: string;
   readonly generator: string;
+  readonly bundleRoot?: string;
+  readonly creatorId?: string;
+  readonly creatorTitle?: string;
+  readonly creatorEntryId?: string;
 }
 
 export interface CompiledTranscriptDocument {
@@ -52,7 +56,11 @@ export function compileTranscriptDocument(input: CompileTranscriptInput): Compil
   const lineage = safeId(input.sourceId);
   if (!lineage) throw new Error('Transcript source id is invalid.');
   const id = `transcript-${lineage}-${transcriptHash.slice(0, 16)}`;
-  const path = `bundles/personal/wiki/transcripts/${lineage}/${transcriptHash.slice(0, 16)}.md`;
+  const bundleRoot = input.bundleRoot ?? 'bundles/personal';
+  if (!/^bundles\/(?:personal|creators\/creator-[a-f0-9]{16})$/u.test(bundleRoot)) {
+    throw new Error('Transcript bundle root is invalid.');
+  }
+  const path = `${bundleRoot}/wiki/transcripts/${lineage}/${transcriptHash.slice(0, 16)}.md`;
   const title = `${input.sourceTitle?.trim() || 'Imported media'} — Transcript`;
   const frontmatter: OkfConceptFrontmatter = {
     type: 'Transcript',
@@ -69,6 +77,9 @@ export function compileTranscriptDocument(input: CompileTranscriptInput): Compil
       transcript_hash: transcriptHash,
       language: input.transcript.language ?? 'und',
       segment_count: input.transcript.segments.length,
+      ...(input.creatorId ? { creator_id: input.creatorId } : {}),
+      ...(input.creatorTitle ? { creator_title: input.creatorTitle } : {}),
+      ...(input.creatorEntryId ? { creator_entry_id: input.creatorEntryId } : {}),
     },
   };
   const segments = input.transcript.segments.map((segment) => {

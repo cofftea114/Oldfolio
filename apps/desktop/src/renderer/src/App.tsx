@@ -41,6 +41,7 @@ import type {
   CreatorFeedEntrySummary,
   CreatorSourceResolutionSummary,
   CreatorSubscriptionSummary,
+  CreatorTitleGraphSummary,
   DocumentSummary,
   MediaJobSummary,
   MediaSettingsSummary,
@@ -57,6 +58,7 @@ import { DEFAULT_TENCENT_ASR_ENGINE, TENCENT_ASR_ENGINES, isTencentASREngine } f
 import { MarkdownEditor } from './MarkdownEditor';
 import { MarkdownReader } from './MarkdownReader';
 import { TranscriptPlayer } from './TranscriptPlayer';
+import { CreatorTitleGraphPreview } from './CreatorTitleGraphPreview';
 
 const EMPTY_MESSAGE = '# 欢迎来到 Oldfolio\n\n选择或创建一个本地 Vault 开始记录。';
 
@@ -155,6 +157,15 @@ export function App() {
   const [creatorBusyId, setCreatorBusyId] = useState('');
   const [expandedCreatorId, setExpandedCreatorId] = useState('');
   const [creatorHistory, setCreatorHistory] = useState<Record<string, CreatorFeedEntrySummary[]>>({});
+  const [creatorTitleGraphs, setCreatorTitleGraphs] = useState<Record<string, CreatorTitleGraphSummary>>({});
+  const [activeCreatorGraphId, setActiveCreatorGraphId] = useState('');
+  const [creatorAnalysisTarget, setCreatorAnalysisTarget] = useState<{
+    creatorId: string;
+    creatorTitle: string;
+    creatorEntryId: string;
+    entryTitle: string;
+    url: string;
+  } | null>(null);
   const [youtubeCreatorApiSettings, setYouTubeCreatorApiSettings] = useState<YouTubeCreatorApiSettingsSummary | null>(null);
   const [youtubeCreatorApiKey, setYouTubeCreatorApiKey] = useState('');
   const [importError, setImportError] = useState('');
@@ -225,7 +236,7 @@ export function App() {
     title: string;
   }[]>([]);
   const deletedDocument = deletedDocuments.at(-1) ?? null;
-  const isSummaryNote = active?.path.startsWith('bundles/personal/wiki/summaries/') === true;
+  const isSummaryNote = active ? /^bundles\/(?:personal|creators\/creator-[a-f0-9]{16})\/wiki\/summaries\//u.test(active.path) : false;
   const selectedOnlineKeyAvailable = onlineAISettings?.keyAvailablePresets.includes(onlineSummaryPreset) ?? false;
   const selectedOnlineKeyPersisted = onlineAISettings?.keyPersistedPresets.includes(onlineSummaryPreset) ?? false;
 
@@ -252,6 +263,11 @@ export function App() {
     setNewNoteTitle('');
     setDocumentError('');
     setDeletedDocuments([]);
+    setCreatorSubscriptions([]);
+    setCreatorHistory({});
+    setCreatorTitleGraphs({});
+    setActiveCreatorGraphId('');
+    setExpandedCreatorId('');
     setSummaryPreparation(null);
     setPendingSummary(null);
     setConceptPreparation(null);
@@ -941,6 +957,48 @@ export function App() {
     }
   };
 
+  const prepareCreatorEntryAnalysis = (creator: CreatorSubscriptionSummary, entry: CreatorFeedEntrySummary) => {
+    const url = entry.mediaUrl ?? entry.link;
+    if (!url) {
+      setImportError('该历史条目没有可分析的媒体地址。');
+      return;
+    }
+    setCreatorAnalysisTarget({
+      creatorId: creator.id,
+      creatorTitle: creator.title,
+      creatorEntryId: entry.id,
+      entryTitle: entry.title,
+      url,
+    });
+    setOnlineMediaUrl(url);
+    setPlatformAccessConfirmed(false);
+    setImportError('');
+    setImportOpen(false);
+    setAISettingsOpen(true);
+    setStatus(`已将“${entry.title}”送入媒体工作台；生成内容将归入 ${creator.title} 的知识包`);
+  };
+
+  const generateCreatorTitleGraph = async (creator: CreatorSubscriptionSummary) => {
+    if (creatorBusyId || creator.entryCount === 0) return;
+    setCreatorBusyId(creator.id);
+    setImportError('');
+    try {
+      const graph = await window.oldfolio.generateCreatorTitleGraph(creator.id);
+      setCreatorTitleGraphs((current) => ({ ...current, [creator.id]: graph }));
+      setActiveCreatorGraphId(creator.id);
+      setExpandedCreatorId(creator.id);
+      if (!creatorHistory[creator.id]) {
+        const entries = await window.oldfolio.getCreatorHistory(creator.id);
+        setCreatorHistory((current) => ({ ...current, [creator.id]: [...entries] }));
+      }
+      setStatus(`已为 ${creator.title} 生成知识星图：${graph.nodeCount} 个标题节点和 ${graph.edgeCount} 条关系`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法生成创作者知识星图');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
   const refreshAllCreators = async () => {
     if (creatorBusyId || creatorSubscriptions.length === 0) return;
     setCreatorBusyId('all');
@@ -970,6 +1028,12 @@ export function App() {
         delete next[id];
         return next;
       });
+      setCreatorTitleGraphs((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setActiveCreatorGraphId((current) => current === id ? '' : current);
       setStatus('已取消关注；原有 Creator 知识包和来源快照保留');
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '无法取消关注');
@@ -1098,6 +1162,10 @@ export function App() {
       const result = await window.oldfolio.transcribeOnlineMedia({
         url: onlineMediaUrl.trim(),
         platformAccessConfirmed,
+        ...(creatorAnalysisTarget ? {
+          creatorId: creatorAnalysisTarget.creatorId,
+          creatorEntryId: creatorAnalysisTarget.creatorEntryId,
+        } : {}),
         ...(language && language !== 'auto' ? { language } : {}),
       });
       if (result.cancelled || !result.transcript) {
@@ -1106,6 +1174,7 @@ export function App() {
       }
       await loadDocuments();
       await openDocument(result.transcript.path);
+      setCreatorAnalysisTarget(null);
       setStatus(result.transcriptSource === 'embedded_subtitle'
         ? '已优先提取在线媒体的内嵌字幕并生成笔记'
         : '在线模型转录笔记已生成，可继续准备摘要');
@@ -1133,6 +1202,10 @@ export function App() {
         url: onlineMediaUrl.trim(),
         modelId: selectedModel,
         platformAccessConfirmed,
+        ...(creatorAnalysisTarget ? {
+          creatorId: creatorAnalysisTarget.creatorId,
+          creatorEntryId: creatorAnalysisTarget.creatorEntryId,
+        } : {}),
         ...(language && language !== 'auto' ? { language } : {}),
       });
       if (result.cancelled || !result.transcript) {
@@ -1141,6 +1214,7 @@ export function App() {
       }
       await loadDocuments();
       await openDocument(result.transcript.path);
+      setCreatorAnalysisTarget(null);
       setStatus(result.transcriptSource === 'embedded_subtitle'
         ? '已提取在线视频字幕并生成笔记'
         : '已使用本地 Whisper 转录在线视频');
@@ -1431,10 +1505,20 @@ export function App() {
                           {creatorBusyId === creator.id ? '分页导入中…' : 'API 补全历史'}
                         </button>
                       )}
+                      <button disabled={Boolean(creatorBusyId) || creator.entryCount === 0} onClick={() => void generateCreatorTitleGraph(creator)} type="button">
+                        {creatorBusyId === creator.id ? '生成中…' : '知识星图'}
+                      </button>
                       <button className="creator-unfollow" disabled={Boolean(creatorBusyId)} onClick={() => void removeCreator(creator.id)} type="button">取消关注</button>
                     </div>
                     {expandedCreatorId === creator.id && (
                       <div className="creator-history">
+                        {activeCreatorGraphId === creator.id && creatorTitleGraphs[creator.id] && (
+                          <CreatorTitleGraphPreview
+                            graph={creatorTitleGraphs[creator.id]!}
+                            onClose={() => setActiveCreatorGraphId('')}
+                            onOpenUrl={(url) => void openCreatorEntryUrl(url)}
+                          />
+                        )}
                         {creatorBusyId === creator.id && !creatorHistory[creator.id] && <small>正在读取 Feed 历史…</small>}
                         {creatorHistory[creator.id]?.length === 0 && <small>Feed 没有返回可展示的历史条目。</small>}
                         {creatorHistory[creator.id]?.map((entry) => (
@@ -1449,6 +1533,7 @@ export function App() {
                             <div className="creator-entry-actions">
                               {entry.link && <button onClick={() => void openCreatorEntryUrl(entry.link)} type="button">打开原内容</button>}
                               {entry.mediaUrl && <button onClick={() => void openCreatorEntryUrl(entry.mediaUrl)} type="button">打开媒体</button>}
+                              {(entry.mediaUrl || entry.link) && <button onClick={() => prepareCreatorEntryAnalysis(creator, entry)} type="button">送入分析工作台</button>}
                             </div>
                           </article>
                         ))}
@@ -1517,8 +1602,9 @@ export function App() {
             <small className="model-help-note">视频包含 ASS、SRT、mov_text 或 WebVTT 文本字幕时会优先提取；没有可用文本字幕时才运行 Whisper。</small>
             <div className="import-divider"><span>在线视频</span></div>
             <label className="field-label">媒体直链或平台分享链接
-              <input disabled={importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
+              <input disabled={importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); setCreatorAnalysisTarget(null); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
             </label>
+            {creatorAnalysisTarget && <small className="creator-analysis-target">目标知识包：{creatorAnalysisTarget.creatorTitle} · {creatorAnalysisTarget.entryTitle}</small>}
             {onlineMediaIsPlatform && <label className="accept-license">
               <input checked={platformAccessConfirmed} disabled={importing || !vault} onChange={(event) => setPlatformAccessConfirmed(event.target.checked)} type="checkbox" />
               我确认有权下载并分析该视频，并遵守来源平台条款与所在地法律
@@ -1579,8 +1665,9 @@ export function App() {
               </button>
               <div className="import-divider"><span>在线媒体</span></div>
               <label className="field-label">媒体直链或平台分享链接
-                <input disabled={aiBusy || importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
+                <input disabled={aiBusy || importing || !vault} onChange={(event) => { setOnlineMediaUrl(event.target.value); setPlatformAccessConfirmed(false); setCreatorAnalysisTarget(null); }} placeholder="YouTube / bilibili / 抖音 / HTTPS 媒体直链" type="text" value={onlineMediaUrl} />
               </label>
+              {creatorAnalysisTarget && <small className="creator-analysis-target">目标知识包：{creatorAnalysisTarget.creatorTitle} · {creatorAnalysisTarget.entryTitle}</small>}
               {onlineMediaIsPlatform && <label className="accept-license">
                 <input checked={platformAccessConfirmed} disabled={aiBusy || importing || !vault} onChange={(event) => setPlatformAccessConfirmed(event.target.checked)} type="checkbox" />
                 我确认有权下载并分析该视频，并遵守来源平台条款与所在地法律

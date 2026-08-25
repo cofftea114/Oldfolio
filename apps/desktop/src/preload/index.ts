@@ -21,6 +21,7 @@ const api: OldfolioDesktopApi = {
   refreshCreatorSubscription: (id) => ipcRenderer.invoke('creator:refresh', id),
   refreshAllCreatorSubscriptions: () => ipcRenderer.invoke('creator:refresh-all'),
   getCreatorHistory: (id) => ipcRenderer.invoke('creator:history', id),
+  generateCreatorTitleGraph: (id) => ipcRenderer.invoke('creator:generate-title-graph', id),
   getYouTubeCreatorApiSettings: () => ipcRenderer.invoke('creator:get-youtube-api-settings'),
   saveYouTubeCreatorApiSettings: (apiKey) => ipcRenderer.invoke('creator:save-youtube-api-settings', apiKey),
   clearYouTubeCreatorApiKey: () => ipcRenderer.invoke('creator:clear-youtube-api-key'),

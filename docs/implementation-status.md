@@ -40,6 +40,19 @@ claim that the planned 9–12 month v1 is complete.
   observations instead of being erased by later refreshes and are saved as immutable API Source
   snapshots. Quota, invalid-key, disabled-API, channel-not-found, network, JSON, and response-size
   failures are explicit.
+- A stored creator-history entry can be sent to the media analysis workbench for local Whisper or
+  configured online transcription. Creator attribution is not trusted from the renderer: the main
+  process resolves the authoritative subscription and entry, verifies that the submitted URL belongs
+  to it, and selects the destination bundle. Generated immutable Source snapshots, Transcript notes,
+  Synthesis summaries, reusable Concepts, index links, and maintenance-log entries stay under the same
+  `bundles/creators/<creator-id>/` bundle.
+- Creator histories can generate an offline title knowledge graph without sending titles to an AI
+  provider. Stable nodes are connected by bounded, non-directional edges using corpus-adjusted title
+  phrase similarity; repeated creator boilerplate is excluded and each title has at most four strong
+  relations. The complete graph is validated and stored as JSON Canvas under the owning Creator
+  bundle, linked from its index, and recorded in its maintenance log. The desktop renders up to 2,000
+  nodes in an interactive force-directed Canvas knowledge star map with zoom, pan, node dragging,
+  search, local-neighborhood focus, and double-click navigation to the original entry.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.
@@ -89,7 +102,7 @@ claim that the planned 9–12 month v1 is complete.
   LM Studio planning uses the smallest active loaded-instance context. A typed context-limit response can
   trigger one bounded local replan using the engine-reported limit; unrelated provider failures are not retried.
 - Extract reusable, theme-first OKF `Concept` pages from generated summaries without requiring strict JSON.
-  Existing normalized titles are updated in place with stable IDs; new concepts, the personal index, and the
+  Existing normalized titles are updated in place with stable IDs; new concepts, the owning bundle index, and the
   maintenance log are written as one reviewable atomic change set. Personal notes, concepts, summaries,
   saved Q&A, and transcripts are presented in separate sidebar groups.
 - Ask questions against the local knowledge base with maintained Wiki pages ranked ahead of source transcripts.
@@ -143,14 +156,17 @@ claim that the planned 9–12 month v1 is complete.
   local model import, controlled chunked execution, retry workflow, and interruption/disk-pressure
   tests are implemented, but no binary or model is bundled.
 - OCR for burned-in subtitles and bitmap tracks such as PGS, VobSub/DVD, and DVB subtitles.
-- Automatic AI summarization of newly tracked creator items, comments API/import flows, audience
+- Automatic queued AI summarization of newly tracked creator items, comments API/import flows, audience
   insight clustering, perspective evolution, and cross-creator synthesis.
-- JSON Canvas generation/preview, the interactive graph workspace, and a complete plugin host process.
+- General AI mind-map generation, a complete freeform JSON Canvas editor, the interactive cross-bundle
+  graph workspace, and a complete plugin host process. Creator title-relationship Canvas generation
+  and bounded desktop preview are implemented.
 - Production WebDAV transport and folder-sync conflict UI.
 - Installers/signing, SBOM release pipeline, platform policy integrations, accessibility audit,
   large-vault benchmarks, mobile credential storage, and mobile native builds.
 - Processing transcripts above the current 200,000-character safety limit, multi-turn conversational memory,
   and one-click batch concept extraction across multiple transcripts.
 
-The next product increment should connect newly detected creator entries to the existing media/text
-summary approval pipeline while preserving payload disclosure and explicit AI-write review.
+The next product increment should prioritize batch import of already-downloaded local media, followed
+by a persistent transcription and summary queue. Filename video IDs and user confirmation can bind
+local files back to Creator history entries; Oldfolio should not add a bulk platform downloader.

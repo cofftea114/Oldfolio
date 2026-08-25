@@ -168,10 +168,16 @@ function markdownText(value: string): string {
     .trim();
 }
 
+function knowledgeBundleRoot(path: string): string {
+  const root = /^(bundles\/(?:personal|creators\/creator-[a-f0-9]{16}))\/wiki\//u.exec(path)?.[1];
+  if (!root) throw new Error('当前文档不属于可维护的个人或博主知识包。');
+  return root;
+}
+
 function summaryPath(sourcePath: string, language: TranscriptSummaryLanguage): string {
   const stem = parse(sourcePath).name.normalize('NFC').replaceAll(/[^a-zA-Z0-9._-]/gu, '-').replaceAll(/-+/gu, '-').slice(0, 52) || 'transcript';
   const languageSuffix = language === 'auto' ? '' : `-${language.toLowerCase()}`;
-  return `bundles/personal/wiki/summaries/${stem}-${sha256(sourcePath).slice(0, 16)}${languageSuffix}.md`;
+  return `${knowledgeBundleRoot(sourcePath)}/wiki/summaries/${stem}-${sha256(sourcePath).slice(0, 16)}${languageSuffix}.md`;
 }
 
 function replacementDiff(path: string, previous: string | null, content: string): string {
@@ -184,12 +190,12 @@ function conceptKey(value: string): string {
   return value.normalize('NFC').toLocaleLowerCase('zh-CN').replaceAll(/[\s\p{P}\p{S}]+/gu, '');
 }
 
-function conceptPath(title: string): string {
+function conceptPath(title: string, bundleRoot: string): string {
   const printable = [...title.normalize('NFC')]
     .map((character) => (character.codePointAt(0) ?? 0) < 32 ? '-' : character)
     .join('');
   const stem = printable.replaceAll(/[<>:"/\\|?*]/gu, '-').replaceAll(/\s+/gu, '-').replaceAll(/-+/gu, '-').slice(0, 48).replaceAll(/^[.-]+|[. -]+$/gu, '') || '未命名概念';
-  return `bundles/personal/wiki/concepts/知识点-${stem}.md`;
+  return `${bundleRoot}/wiki/concepts/知识点-${stem}.md`;
 }
 
 function appendIndexLinks(content: string, concepts: readonly { readonly title: string; readonly path: string }[]): string {
@@ -484,7 +490,7 @@ export class AISummaryService {
   ): Promise<AIConceptPreparation> {
     const source = await this.readSummarySource(sourcePath);
     const execution = await this.execution(executionTarget);
-    const existing = await this.existingConcepts();
+    const existing = await this.existingConcepts(knowledgeBundleRoot(source.snapshot.path));
     return {
       sourcePath: source.snapshot.path,
       sourceRevision: source.snapshot.revision,
@@ -509,7 +515,8 @@ export class AISummaryService {
   ): Promise<AIPendingConceptChange> {
     const source = await this.readSummarySource(sourcePath);
     if (source.snapshot.revision !== sourceRevision) throw new Error('摘要笔记已发生变化，请重新准备概念提取。');
-    const existingConcepts = await this.existingConcepts();
+    const bundleRoot = knowledgeBundleRoot(source.snapshot.path);
+    const existingConcepts = await this.existingConcepts(bundleRoot);
     const execution = await this.execution(executionTarget, signal);
     const generated = await generateConceptsFromSummary(execution.provider, execution.config, {
       sourcePath,
@@ -537,7 +544,7 @@ export class AISummaryService {
       if (!key || generatedKeys.has(key)) continue;
       generatedKeys.add(key);
       const existing = existingByTitle.get(key);
-      const path = existing?.snapshot.path ?? conceptPath(concept.title);
+      const path = existing?.snapshot.path ?? conceptPath(concept.title, bundleRoot);
       const existingSources = existing?.parsed.frontmatter?.sources ?? [];
       const sources = [
         ...existingSources,
@@ -546,7 +553,7 @@ export class AISummaryService {
           : [{ resource: sourcePath, id: `synthesis-${sha256(sourcePath).slice(0, 24)}`, title: source.title }],
       ];
       const stableId = existing?.parsed.frontmatter?.oldfolio?.id
-        ?? `concept-${sha256(key).slice(0, 24)}`;
+        ?? `concept-${sha256(`${bundleRoot}:${key}`).slice(0, 24)}`;
       const content = serializeNewOkfConcept({
         frontmatter: {
           ...(existing?.parsed.frontmatter ?? {}),
@@ -576,13 +583,13 @@ export class AISummaryService {
     }
     if (conceptChanges.length === 0) throw new Error('模型没有提取出可写入的知识概念。');
 
-    const indexSnapshot = await this.repository.read('bundles/personal/index.md');
-    const logSnapshot = await this.repository.read('bundles/personal/log.md');
+    const indexSnapshot = await this.repository.read(`${bundleRoot}/index.md`);
+    const logSnapshot = await this.repository.read(`${bundleRoot}/log.md`);
     const indexContent = appendIndexLinks(indexSnapshot.text, conceptChanges);
     const logContent = prependLog(logSnapshot.text, generatedAt.slice(0, 10), conceptChanges);
     const managedChanges = [
       ...conceptChanges,
-      { title: '个人知识目录', path: indexSnapshot.path, action: 'update' as const, snapshot: indexSnapshot, content: indexContent },
+      { title: '知识包目录', path: indexSnapshot.path, action: 'update' as const, snapshot: indexSnapshot, content: indexContent },
       { title: '知识包变更日志', path: logSnapshot.path, action: 'update' as const, snapshot: logSnapshot, content: logContent },
     ];
     const hasConceptUpdate = conceptChanges.some((concept) => concept.action === 'update');
@@ -690,7 +697,7 @@ export class AISummaryService {
     readonly title: string;
   }> {
     const snapshot = await this.repository.read(sourcePath);
-    if (!sourcePath.startsWith('bundles/personal/wiki/summaries/')) {
+    if (!/^bundles\/(?:personal|creators\/creator-[a-f0-9]{16})\/wiki\/summaries\//u.test(sourcePath)) {
       throw new Error('请选择由 Oldfolio 生成的摘要笔记。');
     }
     const parsed = parseOkfDocument(snapshot.text, sourcePath);
@@ -700,14 +707,14 @@ export class AISummaryService {
     return { snapshot, parsed, title: parsed.frontmatter.title ?? parse(sourcePath).name };
   }
 
-  private async existingConcepts(): Promise<readonly {
+  private async existingConcepts(bundleRoot: string): Promise<readonly {
     readonly snapshot: VaultFileSnapshot;
     readonly parsed: ParsedOkfConcept;
     readonly title: string;
   }[]> {
     const snapshots = await this.repository.scanDocuments();
     return snapshots.flatMap((snapshot) => {
-      if (!snapshot.path.startsWith('bundles/personal/wiki/concepts/')) return [];
+      if (!snapshot.path.startsWith(`${bundleRoot}/wiki/concepts/`)) return [];
       const parsed = parseOkfDocument(snapshot.text, snapshot.path);
       if (!parsed.valid || parsed.kind !== 'concept' || parsed.frontmatter?.type !== 'Concept') return [];
       return [{ snapshot, parsed, title: parsed.frontmatter.title ?? parse(snapshot.path).name }];

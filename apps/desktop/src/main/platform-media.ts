@@ -2,12 +2,75 @@ import { lstat, mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { validateSourceUrl } from '@oldfolio/ingest';
-import { runControlledProcess, type ProcessRunner } from '@oldfolio/media';
+import { ControlledProcessError, runControlledProcess, type ProcessRunner } from '@oldfolio/media';
 
 const MAX_PLATFORM_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
 const MEDIA_EXTENSIONS = new Set([
   '.aac', '.flac', '.m4a', '.mkv', '.mov', '.mp3', '.mp4', '.mpeg', '.mpg', '.ogg', '.opus', '.wav', '.webm',
 ]);
+
+function boundedProcessDiagnostic(error: ControlledProcessError): string {
+  const raw = `${error.result?.stderr ?? ''}\n${error.result?.stdout ?? ''}`;
+  const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'gu');
+  const lines = raw
+    .replaceAll(ansiPattern, '')
+    .split(/\r?\n/u)
+    .map((line) => line.replaceAll(/[\t ]+/gu, ' ').trim())
+    .filter(Boolean);
+  const selected = [...lines].reverse().find((line) => /^error:/iu.test(line)) ?? lines.at(-1) ?? '';
+  return selected
+    .replace(/^error:\s*/iu, '')
+    .replaceAll(/[A-Za-z]:\\[^\s"'<>]+/gu, '[本地路径]')
+    .replaceAll(/https?:\/\/[^\s"'<>]+/gu, (value) => {
+      try {
+        const url = new URL(value);
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return '[远程地址]';
+      }
+    })
+    .slice(0, 500);
+}
+
+function actionablePlatformProcessError(error: unknown): Error {
+  if (!(error instanceof ControlledProcessError)) return error instanceof Error ? error : new Error('平台媒体解析失败。');
+  if (error.code === 'spawn_failed') {
+    return new Error('无法启动 yt-dlp。请在媒体设置中重新选择有效的 yt-dlp 可执行文件。', { cause: error });
+  }
+  if (error.code === 'timeout') return new Error('平台媒体解析超时，请检查网络后重试。', { cause: error });
+  if (error.code === 'output_limit') return new Error('yt-dlp 返回了过多输出，任务已安全停止。请更新 yt-dlp 后重试。', { cause: error });
+  if (error.code !== 'nonzero_exit') return error;
+
+  const detail = boundedProcessDiagnostic(error);
+  if (/sign in|log ?in|cookies?|not a bot|captcha|人机|登录/iu.test(detail)) {
+    return new Error(
+      '平台要求登录或人机验证。Oldfolio 不读取浏览器 Cookie；请改为导入你有权使用的本地文件，或使用平台正式授权能力。',
+      { cause: error },
+    );
+  }
+  if (/unsupported url/iu.test(detail)) {
+    return new Error('当前 yt-dlp 不支持这个链接。请确认它是单个视频分享链接，并尝试更新 yt-dlp。', { cause: error });
+  }
+  if (/update|outdated|newer version/iu.test(detail)) {
+    return new Error('当前 yt-dlp 版本可能过旧。请更新 yt-dlp 后重新选择该可执行文件。', { cause: error });
+  }
+  if (/ffmpeg|ffprobe/iu.test(detail) && /not found|not installed|unable to|cannot|could not/iu.test(detail)) {
+    return new Error('yt-dlp 无法使用 FFmpeg。请确认 FFmpeg 与 ffprobe 位于同一目录，并重新保存媒体工具配置。', { cause: error });
+  }
+  if (/403|forbidden|access denied|geo.?restrict/iu.test(detail)) {
+    return new Error(
+      '平台拒绝了无 Cookie 的媒体访问。即使浏览器可以播放，其登录会话或播放器令牌也不会提供给 Oldfolio；请改为导入你有权使用的本地文件。',
+      { cause: error },
+    );
+  }
+  if (/private video|video unavailable|not available|has been removed/iu.test(detail)) {
+    return new Error('该视频不可公开访问、已删除或需要额外权限，无法通过当前连接器分析。', { cause: error });
+  }
+  return new Error(
+    `yt-dlp 解析失败（退出码 ${String(error.result?.exitCode ?? 1)}）${detail ? `：${detail}` : '。请更新 yt-dlp 并检查链接后重试。'}`,
+    { cause: error },
+  );
+}
 
 export type PlatformMediaId = 'youtube' | 'bilibili' | 'douyin';
 
@@ -63,27 +126,31 @@ export async function downloadPlatformMedia(
     // of trusting a path decoded from yt-dlp stdout.
     const outputTemplate = join(temporaryDirectory, '%(id)s.%(ext)s');
     const runner = options.run ?? runControlledProcess;
-    await runner({
-      executablePath: input.ytDlpPath,
-      args: [
-        '--no-config',
-        '--no-playlist',
-        '--no-cookies',
-        '--no-cookies-from-browser',
-        '--no-cache-dir',
-        '--no-progress',
-        '--no-warnings',
-        '--max-filesize', '2G',
-        '--format', 'bestaudio/best',
-        '--ffmpeg-location', dirname(input.ffmpegPath),
-        '--output', outputTemplate,
-        '--', detected.url.href,
-      ],
-      cwd: temporaryDirectory,
-      timeoutMs: 2 * 60 * 60 * 1_000,
-      maxOutputBytes: 1024 * 1024,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    try {
+      await runner({
+        executablePath: input.ytDlpPath,
+        args: [
+          '--no-config',
+          '--no-playlist',
+          '--no-cookies',
+          '--no-cookies-from-browser',
+          '--no-cache-dir',
+          '--no-progress',
+          '--no-warnings',
+          '--max-filesize', '2G',
+          '--format', 'bestaudio/best',
+          '--ffmpeg-location', dirname(input.ffmpegPath),
+          '--output', outputTemplate,
+          '--', detected.url.href,
+        ],
+        cwd: temporaryDirectory,
+        timeoutMs: 2 * 60 * 60 * 1_000,
+        maxOutputBytes: 1024 * 1024,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+    } catch (error) {
+      throw actionablePlatformProcessError(error);
+    }
     const entries = await readdir(temporaryDirectory, { withFileTypes: true });
     const mediaFiles = entries.filter((entry) => entry.isFile() && MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase()));
     if (mediaFiles.length !== 1) throw new Error('平台解析器没有生成唯一的媒体文件。');

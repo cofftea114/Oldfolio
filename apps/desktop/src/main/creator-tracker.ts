@@ -5,6 +5,11 @@ import { compileSourceDocument } from '@oldfolio/ingest';
 import type { RssSourceConnector } from '@oldfolio/ingest';
 import { serializeNewOkfConcept } from '@oldfolio/okf';
 import { VaultNotFoundError, type VaultRepository } from '@oldfolio/vault';
+import {
+  buildCreatorTitleGraph,
+  type CreatorTitleGraphEdge,
+  type CreatorTitleGraphNode,
+} from './creator-title-graph.js';
 
 const CONFIG_PATH = '.oldfolio/config/creator-subscriptions.json';
 const REFRESH_INTERVAL_MS = 60 * 60 * 1_000;
@@ -64,6 +69,18 @@ export interface CreatorFeedEntrySummary {
   readonly mediaUrl?: string;
   readonly mediaType?: string;
   readonly duration?: string;
+}
+
+export interface CreatorTitleGraphSummary {
+  readonly creatorId: string;
+  readonly creatorTitle: string;
+  readonly path: string;
+  readonly generatedAt: string;
+  readonly nodeCount: number;
+  readonly edgeCount: number;
+  readonly relatedNodeCount: number;
+  readonly nodes: readonly CreatorTitleGraphNode[];
+  readonly edges: readonly CreatorTitleGraphEdge[];
 }
 
 function sha256(value: string): string {
@@ -369,6 +386,58 @@ export class CreatorTrackerService {
         if (Number.isFinite(rightTime)) return 1;
         return 0;
       });
+    });
+  }
+
+  generateTitleGraph(id: string): Promise<CreatorTitleGraphSummary> {
+    return this.run(async () => {
+      const current = await this.load();
+      const item = current.subscriptions.find((candidate) => candidate.id === id);
+      if (!item) throw new Error('未找到该关注。');
+      const generatedAt = this.now().toISOString();
+      const graph = buildCreatorTitleGraph(item.id, item.title, item.entries, generatedAt);
+      const path = `bundles/creators/${item.id}/wiki/graphs/title-knowledge-network.canvas`;
+      const content = `${JSON.stringify(graph.canvas, null, 2)}\n`;
+      let changed = false;
+      try {
+        const existing = await this.repository.read(path);
+        if (existing.text !== content) {
+          await this.repository.write(path, content, existing.revision);
+          changed = true;
+        }
+      } catch (error) {
+        if (!(error instanceof VaultNotFoundError)) throw error;
+        await this.repository.write(path, content, null);
+        changed = true;
+      }
+      const indexPath = `bundles/creators/${item.id}/index.md`;
+      const index = await this.repository.read(indexPath);
+      const relativeGraphPath = 'wiki/graphs/title-knowledge-network.canvas';
+      if (!index.text.includes(`[[${relativeGraphPath}`)) {
+        await this.repository.write(
+          indexPath,
+          `${index.text.trimEnd()}\n- [[${relativeGraphPath}|标题知识关系图]]\n`,
+          index.revision,
+        );
+      }
+      if (changed) {
+        await this.appendLog(
+          item.id,
+          generatedAt,
+          `生成标题知识关系图：${String(graph.nodes.length)} 个标题节点，${String(graph.edges.length)} 条关系`,
+        );
+      }
+      return {
+        creatorId: graph.creatorId,
+        creatorTitle: graph.creatorTitle,
+        path,
+        generatedAt,
+        nodeCount: graph.nodes.length,
+        edgeCount: graph.edges.length,
+        relatedNodeCount: graph.relatedNodeCount,
+        nodes: graph.nodes,
+        edges: graph.edges,
+      };
     });
   }
 

@@ -52,6 +52,37 @@ describe('creator tracker', () => {
     vault.close();
   });
 
+  it('writes a deterministic title relationship canvas inside the creator bundle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-creator-title-graph-'));
+    roots.push(root);
+    const vault = await VaultRepository.open(root);
+    await vault.initialize();
+    const connector = new RssSourceConnector({
+      fetcher: () => Promise.resolve(new Response(feed([
+        { id: 'one', title: 'DeepSeek 本地部署教程' },
+        { id: 'two', title: 'DeepSeek 本地模型安装指南' },
+        { id: 'three', title: '康熙晚年继承问题' },
+      ]), { status: 200, headers: { 'content-type': 'application/rss+xml' } })),
+      now: () => new Date('2026-08-25T00:00:00.000Z'),
+    });
+    const tracker = new CreatorTrackerService(vault, connector, () => new Date('2026-08-25T01:00:00.000Z'));
+    const followed = await tracker.follow('https://example.com/feed.xml');
+
+    const graph = await tracker.generateTitleGraph(followed.id);
+    expect(graph).toMatchObject({ nodeCount: 3, relatedNodeCount: 2 });
+    expect(graph.edgeCount).toBeGreaterThanOrEqual(1);
+    const canvas = JSON.parse((await vault.read(graph.path)).text) as {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ fromNode: string; toNode: string; fromEnd: string; toEnd: string }>;
+    };
+    const nodeIds = new Set(canvas.nodes.map((node) => node.id));
+    expect(canvas.edges.every((edge) => nodeIds.has(edge.fromNode) && nodeIds.has(edge.toNode))).toBe(true);
+    expect(canvas.edges.every((edge) => edge.fromEnd === 'none' && edge.toEnd === 'none')).toBe(true);
+    expect((await vault.read(`bundles/creators/${followed.id}/index.md`)).text).toContain('title-knowledge-network.canvas');
+    expect((await vault.read(`bundles/creators/${followed.id}/log.md`)).text).toContain('生成标题知识关系图');
+    vault.close();
+  });
+
   it('deduplicates unchanged checks and records only newly observed feed entries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oldfolio-creator-refresh-'));
     roots.push(root);

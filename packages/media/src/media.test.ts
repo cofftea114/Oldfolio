@@ -76,6 +76,24 @@ describe('caption parsing and OKF compilation', () => {
     });
   });
 
+  it('can compile a transcript into an isolated Creator bundle', () => {
+    const compiled = compileTranscriptDocument({
+      sourceId: 'media-creator-video',
+      sourceHash: 'a'.repeat(64),
+      sourceResource: 'assets/media/video.mp4',
+      sourceTitle: 'Creator video',
+      transcript: { text: 'Creator knowledge', segments: [{ startMs: 0, endMs: 1_000, text: 'Creator knowledge' }] },
+      generatedAt: '2026-08-25T00:00:00.000Z',
+      generator: 'test',
+      bundleRoot: 'bundles/creators/creator-0123456789abcdef',
+      creatorId: 'creator-0123456789abcdef',
+      creatorTitle: 'Creator',
+      creatorEntryId: 'yt:video:one',
+    });
+    expect(compiled.path).toMatch(/^bundles\/creators\/creator-0123456789abcdef\/wiki\/transcripts\//u);
+    expect(compiled.content).toContain('creator_entry_id: yt:video:one');
+  });
+
   it('does not create playback manifests from ordinary or malformed notes', () => {
     expect(parseTranscriptPlaybackManifest('# Note\n\n- [00:01](assets/a.mp3#t=1) text', 'notes/a.md')).toBeNull();
     const transcript = compileTranscriptDocument({

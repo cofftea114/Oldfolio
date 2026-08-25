@@ -28,6 +28,15 @@ bundles, media-derived notes, and user-controlled AI providers.
   playlist with official pagination. The API key is sent in the `X-Goog-Api-Key` header and stored only
   through the device secret store; each creator currently retains up to 2,000 API history entries and
   every import is preserved as an immutable Creator Source snapshot.
+- A creator history entry can be sent into the existing media analysis workbench. The main process
+  verifies the entry URL against the stored subscription before assigning provenance; generated Source,
+  Transcript, Synthesis, reusable Concept pages, index links, and change-log entries remain inside that
+  creator's isolated knowledge bundle instead of being mixed into the personal bundle.
+- Creator history can be compiled offline into a deterministic knowledge star map. Related titles are
+  connected by straight, non-directional edges, density is bounded for histories up to 2,000 entries,
+  and the complete graph is saved as a standard JSON Canvas file inside the Creator bundle. The desktop
+  renders every title on a force-directed Canvas: node size reflects connectivity, and users can pan,
+  zoom, drag, search, focus neighboring titles, or double-click through to the original entry.
 - Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Public HTTPS audio/video direct-link import with bounded streaming download, embedded-subtitle
   preference, resumable online speech transcription, and explicit provider disclosure.
