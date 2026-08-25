@@ -79,6 +79,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .creator-source-result strong, .creator-source-result small { display: block; }
 .creator-source-result strong { font-size: 10px; }
 .creator-source-result small { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.creator-api-settings { margin-top: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #f8f8f5; }
+.creator-api-settings summary { cursor: pointer; color: var(--accent); font-size: 10px; font-weight: 650; }
+.creator-api-settings[open] summary { margin-bottom: 7px; }
+.creator-api-settings > small { display: block; margin-top: 6px; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .creator-subscriptions { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
 .creator-subscriptions-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; }
 .source-import .creator-subscriptions-heading button { width: auto; margin: 0; padding: 5px 7px; background: #e5e9e5; color: var(--accent); }

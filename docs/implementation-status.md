@@ -33,6 +33,13 @@ claim that the planned 9–12 month v1 is complete.
   official YouTube Data API uploads-playlist pagination path. Bilibili and Douyin pages without a public
   Feed report that an approved official-API connector and user authorization are required and do not
   fall back to page scraping.
+- YouTube Data API BYOK is available inside the creator panel. The key remains in the device secret
+  store and is transmitted with `X-Goog-Api-Key`, never in the request URL, Vault, SQLite, synchronized
+  settings, or logs. `channels.list` resolves channel IDs and uploads playlists; `playlistItems.list`
+  walks official 50-item pages up to the current 2,000-entry per-creator bound. Results merge with Feed
+  observations instead of being erased by later refreshes and are saved as immutable API Source
+  snapshots. Quota, invalid-key, disabled-API, channel-not-found, network, JSON, and response-size
+  failures are explicit.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.

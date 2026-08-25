@@ -51,6 +51,7 @@ import type {
   TencentASREngineModel,
   VaultDocument,
   VaultSummary,
+  YouTubeCreatorApiSettingsSummary,
 } from '../../shared/contracts';
 import { DEFAULT_TENCENT_ASR_ENGINE, TENCENT_ASR_ENGINES, isTencentASREngine } from '../../shared/contracts';
 import { MarkdownEditor } from './MarkdownEditor';
@@ -126,6 +127,17 @@ function isPlatformShareUrl(value: string): boolean {
   }
 }
 
+function isYouTubeCreatorFeed(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.hostname === 'youtube.com' || url.hostname.endsWith('.youtube.com'))
+      && url.pathname === '/feeds/videos.xml'
+      && Boolean(url.searchParams.get('channel_id'));
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [vault, setVault] = useState<VaultSummary | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -143,6 +155,8 @@ export function App() {
   const [creatorBusyId, setCreatorBusyId] = useState('');
   const [expandedCreatorId, setExpandedCreatorId] = useState('');
   const [creatorHistory, setCreatorHistory] = useState<Record<string, CreatorFeedEntrySummary[]>>({});
+  const [youtubeCreatorApiSettings, setYouTubeCreatorApiSettings] = useState<YouTubeCreatorApiSettingsSummary | null>(null);
+  const [youtubeCreatorApiKey, setYouTubeCreatorApiKey] = useState('');
   const [importError, setImportError] = useState('');
   const [importing, setImporting] = useState(false);
   const [mediaSettings, setMediaSettings] = useState<MediaSettingsSummary | null>(null);
@@ -866,6 +880,57 @@ export function App() {
     }
   };
 
+  const saveYouTubeCreatorApiSettings = async () => {
+    if (importing || (!youtubeCreatorApiKey.trim() && !youtubeCreatorApiSettings?.keyAvailable)) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      const settings = await window.oldfolio.saveYouTubeCreatorApiSettings(youtubeCreatorApiKey);
+      setYouTubeCreatorApiSettings(settings);
+      setYouTubeCreatorApiKey('');
+      setStatus(`YouTube Data API Key 已${settings.keyPersisted ? '安全保存到本机' : '仅在本次运行中保存'}`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法保存 YouTube Data API Key');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const clearYouTubeCreatorApiKey = async () => {
+    if (importing) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      setYouTubeCreatorApiSettings(await window.oldfolio.clearYouTubeCreatorApiKey());
+      setYouTubeCreatorApiKey('');
+      setStatus('YouTube Data API Key 已从本机安全存储清除');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法清除 YouTube Data API Key');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const syncYouTubeCreatorHistory = async (id: string) => {
+    if (creatorBusyId || !youtubeCreatorApiSettings?.keyAvailable) return;
+    setCreatorBusyId(id);
+    setImportError('');
+    try {
+      const updated = await window.oldfolio.syncYouTubeCreatorHistory(id);
+      const entries = await window.oldfolio.getCreatorHistory(id);
+      setCreatorHistory((current) => ({ ...current, [id]: [...entries] }));
+      setExpandedCreatorId(id);
+      await Promise.all([loadDocuments(), loadCreatorSubscriptions()]);
+      setStatus(updated.historyComplete
+        ? `${updated.title} 已通过官方 API 导入 ${updated.entryCount} 条历史内容`
+        : `${updated.title} 已导入前 ${updated.entryCount} 条历史内容，达到当前 ${youtubeCreatorApiSettings.maxHistoryEntries} 条上限`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法通过 YouTube Data API 补全历史');
+    } finally {
+      setCreatorBusyId('');
+    }
+  };
+
   const openCreatorEntryUrl = async (url: string | undefined) => {
     if (!url) return;
     setImportError('');
@@ -919,7 +984,11 @@ export function App() {
     if (!next || !vault) return;
     setImportError('');
     try {
-      await loadCreatorSubscriptions();
+      const [, settings] = await Promise.all([
+        loadCreatorSubscriptions(),
+        window.oldfolio.getYouTubeCreatorApiSettings(),
+      ]);
+      setYouTubeCreatorApiSettings(settings);
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '无法读取关注列表');
     }
@@ -1319,6 +1388,24 @@ export function App() {
               <Radio size={14} /> 关注并建立 Creator 知识包
             </button>
             <small className="creator-help">应用运行时每 15 分钟检查到期 Feed；每个 Feed 默认间隔 1 小时。新来源保存到独立 Creator Bundle。</small>
+            <details className="creator-api-settings">
+              <summary>YouTube 历史补全（官方 Data API）</summary>
+              <small className="creator-help">可选。API Key 只保存在本机系统加密存储中，用于按 @handle 解析频道和分页导入公开上传历史；当前每位博主最多保存 2000 条。</small>
+              <label className="field-label">YouTube Data API Key
+                <input
+                  autoComplete="off"
+                  onChange={(event) => setYouTubeCreatorApiKey(event.target.value)}
+                  placeholder={youtubeCreatorApiSettings?.keyAvailable ? '已安全保存；留空保持不变' : 'AIza…'}
+                  type="password"
+                  value={youtubeCreatorApiKey}
+                />
+              </label>
+              <div className="creator-actions">
+                <button disabled={importing || (!youtubeCreatorApiKey.trim() && !youtubeCreatorApiSettings?.keyAvailable)} onClick={() => void saveYouTubeCreatorApiSettings()} type="button">保存 API Key</button>
+                {youtubeCreatorApiSettings?.keyAvailable && <button className="creator-unfollow" disabled={importing} onClick={() => void clearYouTubeCreatorApiKey()} type="button">清除 API Key</button>}
+              </div>
+              <small>状态：{youtubeCreatorApiSettings?.keyAvailable ? youtubeCreatorApiSettings.keyPersisted ? '已由操作系统加密保存' : '仅本次运行可用' : '未配置'}</small>
+            </details>
             {creatorSubscriptions.length > 0 && (
               <div className="creator-subscriptions">
                 <div className="creator-subscriptions-heading">
@@ -1330,6 +1417,7 @@ export function App() {
                     <button className="creator-title" onClick={() => void openDocument(creator.creatorDocumentPath)} type="button">{creator.title}</button>
                     <small>上次检查：{displayDateTime(creator.lastCheckedAt)}</small>
                     {creator.lastNewEntryCount > 0 && <small className="creator-new">新增 {creator.lastNewEntryCount} 条</small>}
+                    {creator.historySource === 'youtube_data_api' && <small>历史来源：YouTube Data API · {creator.historyComplete ? '已完成分页' : `最多保留 ${youtubeCreatorApiSettings?.maxHistoryEntries ?? 2_000} 条`}{creator.historyTotalResults !== undefined ? ` · API 报告 ${creator.historyTotalResults} 条` : ''}</small>}
                     {creator.lastError && <small className="creator-error">{creator.lastError}</small>}
                     <div className="creator-actions">
                       <button disabled={Boolean(creatorBusyId)} onClick={() => void toggleCreatorHistory(creator.id)} type="button">
@@ -1338,6 +1426,11 @@ export function App() {
                       <button disabled={Boolean(creatorBusyId)} onClick={() => void refreshCreator(creator.id)} type="button">
                         {creatorBusyId === creator.id ? '检查中…' : '检查更新'}
                       </button>
+                      {isYouTubeCreatorFeed(creator.feedUrl) && (
+                        <button disabled={Boolean(creatorBusyId) || !youtubeCreatorApiSettings?.keyAvailable} onClick={() => void syncYouTubeCreatorHistory(creator.id)} type="button">
+                          {creatorBusyId === creator.id ? '分页导入中…' : 'API 补全历史'}
+                        </button>
+                      )}
                       <button className="creator-unfollow" disabled={Boolean(creatorBusyId)} onClick={() => void removeCreator(creator.id)} type="button">取消关注</button>
                     </div>
                     {expandedCreatorId === creator.id && (

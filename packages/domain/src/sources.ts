@@ -69,11 +69,15 @@ export interface SourceFetchRequest {
   readonly previous?: SourceSnapshot;
 }
 
+export interface SourceInvocationContext extends OperationContext {
+  resolveSecret(secretRef: string): Promise<string | undefined>;
+}
+
 export interface SourceConnector {
   readonly id: string;
   readonly displayName: string;
   readonly accessMethods: readonly SourceAccessMethod[];
   readonly retentionPolicy: SourceRetentionPolicy;
   probe(input: SourceInput, context?: OperationContext): Promise<SourceProbeResult>;
-  fetch(request: SourceFetchRequest, context?: OperationContext): Promise<SourceSnapshot>;
+  fetch(request: SourceFetchRequest, context?: SourceInvocationContext): Promise<SourceSnapshot>;
 }

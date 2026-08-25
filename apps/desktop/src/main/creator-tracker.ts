@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import type { SourceSnapshot } from '@oldfolio/domain';
 import { compileSourceDocument } from '@oldfolio/ingest';
 import type { RssSourceConnector } from '@oldfolio/ingest';
 import { serializeNewOkfConcept } from '@oldfolio/okf';
@@ -24,6 +25,10 @@ interface StoredCreatorSubscription {
   readonly knownEntryIds: readonly string[];
   readonly entries: readonly CreatorFeedEntrySummary[];
   readonly lastNewEntryCount: number;
+  readonly historySource?: 'youtube_data_api';
+  readonly historyFetchedAt?: string;
+  readonly historyComplete?: boolean;
+  readonly historyTotalResults?: number;
   readonly lastError?: string;
 }
 
@@ -43,6 +48,10 @@ export interface CreatorSubscriptionSummary {
   readonly lastSnapshotId: string;
   readonly lastNewEntryCount: number;
   readonly entryCount: number;
+  readonly historySource: 'feed' | 'youtube_data_api';
+  readonly historyFetchedAt?: string;
+  readonly historyComplete?: boolean;
+  readonly historyTotalResults?: number;
   readonly lastError?: string;
 }
 
@@ -136,6 +145,24 @@ function feedEntries(metadata: Readonly<Record<string, unknown>>): readonly Crea
   return [...new Map(entries.map((entry) => [entry.id, entry])).values()];
 }
 
+function mergeEntries(
+  existing: readonly CreatorFeedEntrySummary[],
+  incoming: readonly CreatorFeedEntrySummary[],
+): readonly CreatorFeedEntrySummary[] {
+  const merged = new Map(incoming.map((entry) => [entry.id, entry]));
+  for (const entry of existing) {
+    if (!merged.has(entry.id)) merged.set(entry.id, entry);
+  }
+  return [...merged.values()].sort((left, right) => {
+    const leftTime = Date.parse(left.publishedAt ?? '');
+    const rightTime = Date.parse(right.publishedAt ?? '');
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) return rightTime - leftTime;
+    if (Number.isFinite(leftTime)) return -1;
+    if (Number.isFinite(rightTime)) return 1;
+    return 0;
+  }).slice(0, MAX_ENTRY_IDS);
+}
+
 function validateSubscription(value: unknown): StoredCreatorSubscription {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('关注记录无效。');
   const item = value as Partial<StoredCreatorSubscription>;
@@ -157,6 +184,10 @@ function validateSubscription(value: unknown): StoredCreatorSubscription {
     || item.knownEntryIds.some((id) => typeof id !== 'string' || !id || id.length > 4_096)
     || !Number.isSafeInteger(lastNewEntryCount) || lastNewEntryCount === undefined || lastNewEntryCount < 0
     || entries === undefined
+    || (item.historySource !== undefined && item.historySource !== 'youtube_data_api')
+    || (item.historyFetchedAt !== undefined && !validDate(item.historyFetchedAt))
+    || (item.historyComplete !== undefined && typeof item.historyComplete !== 'boolean')
+    || (item.historyTotalResults !== undefined && (!Number.isSafeInteger(item.historyTotalResults) || item.historyTotalResults < 0))
     || (item.lastError !== undefined && (typeof item.lastError !== 'string' || item.lastError.length > 500))
   ) throw new Error('关注记录无效。');
   return {
@@ -172,6 +203,10 @@ function validateSubscription(value: unknown): StoredCreatorSubscription {
     knownEntryIds: [...new Set(item.knownEntryIds)],
     entries,
     lastNewEntryCount,
+    ...(item.historySource ? { historySource: item.historySource } : {}),
+    ...(item.historyFetchedAt ? { historyFetchedAt: item.historyFetchedAt } : {}),
+    ...(item.historyComplete === undefined ? {} : { historyComplete: item.historyComplete }),
+    ...(item.historyTotalResults === undefined ? {} : { historyTotalResults: item.historyTotalResults }),
     ...(item.lastError ? { lastError: item.lastError } : {}),
   };
 }
@@ -198,6 +233,10 @@ function summary(item: StoredCreatorSubscription): CreatorSubscriptionSummary {
     lastSnapshotId: item.lastSnapshotId,
     lastNewEntryCount: item.lastNewEntryCount,
     entryCount: item.entries.length,
+    historySource: item.historySource ?? 'feed',
+    ...(item.historyFetchedAt ? { historyFetchedAt: item.historyFetchedAt } : {}),
+    ...(item.historyComplete === undefined ? {} : { historyComplete: item.historyComplete }),
+    ...(item.historyTotalResults === undefined ? {} : { historyTotalResults: item.historyTotalResults }),
     ...(item.lastError ? { lastError: item.lastError } : {}),
   };
 }
@@ -333,6 +372,46 @@ export class CreatorTrackerService {
     });
   }
 
+  importOfficialHistory(id: string, snapshot: SourceSnapshot): Promise<CreatorSubscriptionSummary> {
+    return this.run(async () => {
+      if (snapshot.connectorId !== 'org.oldfolio.youtube-data-api') throw new Error('该来源不是 YouTube Data API 历史快照。');
+      const current = await this.load();
+      const item = current.subscriptions.find((candidate) => candidate.id === id);
+      if (!item) throw new Error('未找到该关注。');
+      const incoming = feedEntries(snapshot.metadata);
+      const known = new Set(item.knownEntryIds);
+      const newEntryCount = incoming.filter((entry) => !known.has(entry.id)).length;
+      const entries = mergeEntries(item.entries, incoming);
+      const historyTotalResults = Number(snapshot.metadata.totalResults);
+      const updated: StoredCreatorSubscription = {
+        id: item.id,
+        title: item.title,
+        feedUrl: item.feedUrl,
+        creatorDocumentPath: item.creatorDocumentPath,
+        addedAt: item.addedAt,
+        lastCheckedAt: item.lastCheckedAt,
+        nextCheckAt: item.nextCheckAt,
+        lastContentHash: item.lastContentHash,
+        lastSnapshotId: item.lastSnapshotId,
+        knownEntryIds: entries.map((entry) => entry.id),
+        entries,
+        lastNewEntryCount: newEntryCount,
+        historySource: 'youtube_data_api',
+        historyFetchedAt: snapshot.fetchedAt,
+        historyComplete: snapshot.metadata.complete === true,
+        ...(Number.isSafeInteger(historyTotalResults) && historyTotalResults >= 0 ? { historyTotalResults } : {}),
+      };
+      await this.saveSnapshot(item.id, snapshot);
+      await this.appendLog(
+        item.id,
+        snapshot.fetchedAt,
+        `通过 YouTube Data API 导入 ${incoming.length} 条历史内容；新增 ${newEntryCount} 条；保存来源快照 ${snapshot.id}`,
+      );
+      await this.replaceAndSave(current, updated);
+      return summary(updated);
+    });
+  }
+
   remove(id: string): Promise<readonly CreatorSubscriptionSummary[]> {
     return this.run(async () => {
       const current = await this.load();
@@ -353,10 +432,11 @@ export class CreatorTrackerService {
         input: { kind: 'feed', url: item.feedUrl },
         capabilities: ['metadata', 'content', 'subscription'],
       });
-      const entries = feedEntries(snapshot.metadata);
-      const ids = entries.map((entry) => entry.id);
+      const feedHistory = feedEntries(snapshot.metadata);
+      const ids = feedHistory.map((entry) => entry.id);
       const known = new Set(item.knownEntryIds);
       const newEntryCount = ids.filter((id) => !known.has(id)).length;
+      const entries = mergeEntries(item.entries, feedHistory);
       const changed = snapshot.contentHash !== item.lastContentHash;
       if (changed) {
         await this.saveSnapshot(item.id, snapshot);
@@ -372,9 +452,13 @@ export class CreatorTrackerService {
         nextCheckAt: new Date(this.now().getTime() + REFRESH_INTERVAL_MS).toISOString(),
         lastContentHash: snapshot.contentHash,
         lastSnapshotId: snapshot.id,
-        knownEntryIds: ids,
+        knownEntryIds: entries.map((entry) => entry.id),
         entries,
         lastNewEntryCount: changed ? newEntryCount : 0,
+        ...(item.historySource ? { historySource: item.historySource } : {}),
+        ...(item.historyFetchedAt ? { historyFetchedAt: item.historyFetchedAt } : {}),
+        ...(item.historyComplete === undefined ? {} : { historyComplete: item.historyComplete }),
+        ...(item.historyTotalResults === undefined ? {} : { historyTotalResults: item.historyTotalResults }),
       };
       await this.replaceAndSave(current, updated);
       return summary(updated);
@@ -399,7 +483,7 @@ export class CreatorTrackerService {
     await this.writeIfMissing(item.creatorDocumentPath, creatorDocument(item, fetchedAt));
   }
 
-  private async saveSnapshot(id: string, snapshot: Awaited<ReturnType<RssSourceConnector['fetch']>>): Promise<void> {
+  private async saveSnapshot(id: string, snapshot: SourceSnapshot): Promise<void> {
     const document = compileSourceDocument(snapshot, { bundleRoot: `bundles/creators/${id}` });
     await this.writeIfMissing(document.path, document.content);
   }

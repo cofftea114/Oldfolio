@@ -134,4 +134,57 @@ describe('creator tracker', () => {
     await expect(restarted.list()).resolves.toMatchObject([{ id: followed.id, entryCount: 1 }]);
     vault.close();
   });
+
+  it('merges official YouTube history and preserves it during later Feed refreshes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-creator-youtube-history-'));
+    roots.push(root);
+    const vault = await VaultRepository.open(root);
+    await vault.initialize();
+    let currentFeed = feed([{ id: 'yt:video:newest', title: 'Newest video' }]);
+    const connector = new RssSourceConnector({
+      fetcher: () => Promise.resolve(new Response(currentFeed, { status: 200 })),
+    });
+    const tracker = new CreatorTrackerService(vault, connector);
+    const followed = await tracker.follow('https://www.youtube.com/feeds/videos.xml?channel_id=UCvijahEyGtvMpmMHBu4FS2w');
+    const imported = await tracker.importOfficialHistory(followed.id, {
+      id: 'youtube-channel-UCvijahEyGtvMpmMHBu4FS2w-0123456789abcdef',
+      connectorId: 'org.oldfolio.youtube-data-api',
+      canonicalUri: 'https://www.youtube.com/channel/UCvijahEyGtvMpmMHBu4FS2w',
+      fetchedAt: '2026-08-25T00:00:00.000Z',
+      contentHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      title: 'Creator Notes — YouTube uploads',
+      mimeType: 'application/json',
+      text: '# History',
+      metadata: {
+        sourceLineageId: 'youtube-channel-UCvijahEyGtvMpmMHBu4FS2w',
+        complete: true,
+        totalResults: 2,
+        entries: [
+          { id: 'yt:video:newest', title: 'Newest video', link: 'https://www.youtube.com/watch?v=newest' },
+          { id: 'yt:video:older', title: 'Older video', link: 'https://www.youtube.com/watch?v=older' },
+        ],
+      },
+      deletionPolicy: { supportsRemoteDeletionSignals: false },
+    });
+    expect(imported).toMatchObject({
+      entryCount: 2,
+      historySource: 'youtube_data_api',
+      historyComplete: true,
+      historyTotalResults: 2,
+      lastNewEntryCount: 1,
+    });
+    currentFeed = feed([{ id: 'yt:video:latest', title: 'Latest video' }]);
+    await tracker.refresh(followed.id);
+    await expect(tracker.list()).resolves.toMatchObject([{
+      historySource: 'youtube_data_api', historyComplete: true, historyTotalResults: 2,
+    }]);
+    await expect(tracker.history(followed.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'yt:video:latest' }),
+      expect.objectContaining({ id: 'yt:video:newest' }),
+      expect.objectContaining({ id: 'yt:video:older' }),
+    ]));
+    const documents = await vault.scanDocuments();
+    expect(documents.some((document) => document.path.includes('/raw/youtube-channel-UCvijahEyGtvMpmMHBu4FS2w/'))).toBe(true);
+    vault.close();
+  });
 });

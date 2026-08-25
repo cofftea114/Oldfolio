@@ -1,7 +1,7 @@
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
-import { CreatorSourceResolver, IngestionPipeline, RssSourceConnector } from '@oldfolio/ingest';
+import { CreatorSourceResolver, IngestionPipeline, RssSourceConnector, YouTubeDataApiConnector } from '@oldfolio/ingest';
 import {
   MediaDeviceConfigStore,
   MediaJobStore,
@@ -30,6 +30,7 @@ import {
   OnlineAIService,
 } from './online-ai.js';
 import type { OnlineSummaryPreset } from './online-ai.js';
+import { YouTubeCreatorApiService } from './youtube-creator-api.js';
 import { resumeOnlineMediaTranscription, transcribeCloudMediaFile, transcribeOnlineMediaUrl } from './online-media-transcription.js';
 import type {
   DocumentSummary,
@@ -51,12 +52,14 @@ let documentLifecycle: DocumentLifecycleService | null = null;
 let onlineAI: OnlineAIService | null = null;
 let cloudTranscription: CloudTranscriptionService | null = null;
 let creatorTracker: CreatorTrackerService | null = null;
+let youtubeCreatorApi: YouTubeCreatorApiService | null = null;
 let creatorRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const activeMediaTasks = new Set<AbortController>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
 const creatorSourceResolver = new CreatorSourceResolver();
+const youtubeDataApiConnector = new YouTubeDataApiConnector();
 const ingestion = new IngestionPipeline([rssConnector]);
 // LM Studio's non-streaming endpoint may not return response headers until a long
 // generation completes. Chromium's network stack avoids Node fetch/Undici's
@@ -126,6 +129,37 @@ function requireDocumentLifecycle(): DocumentLifecycleService {
 function requireCreatorTracker(): CreatorTrackerService {
   if (!creatorTracker) throw new Error('请先打开一个 Vault');
   return creatorTracker;
+}
+
+function requireYouTubeCreatorApi(): YouTubeCreatorApiService {
+  if (!youtubeCreatorApi) throw new Error('YouTube Data API 服务尚未初始化');
+  return youtubeCreatorApi;
+}
+
+async function resolveCreatorSource(url: string) {
+  const resolution = await creatorSourceResolver.resolve(url);
+  if (resolution.status === 'ready' || resolution.platform !== 'youtube') return resolution;
+  const service = requireYouTubeCreatorApi();
+  if (!service.settings().keyAvailable) return resolution;
+  try {
+    const channel = await service.resolveChannel(url);
+    return {
+      inputUrl: resolution.inputUrl,
+      canonicalUrl: channel.canonicalUrl,
+      platform: 'youtube' as const,
+      status: 'ready' as const,
+      method: 'official_api' as const,
+      authorization: 'api_key_or_oauth' as const,
+      feedUrl: channel.feedUrl,
+      title: channel.title,
+      message: '已通过用户配置的 YouTube Data API Key 解析频道；关注使用公开 Feed，更早的公开历史可在关注后按需分页导入（当前最多 2000 条）。',
+    };
+  } catch (error) {
+    return {
+      ...resolution,
+      message: `${resolution.message} API 检测失败：${error instanceof Error ? error.message : '未知错误'}`,
+    };
+  }
 }
 
 function stopCreatorRefreshSchedule(): void {
@@ -401,12 +435,12 @@ function registerIpc(): void {
   ipcMain.handle('creator:probe-source', async (event, url: unknown) => {
     assertTrustedSender(event);
     if (typeof url !== 'string' || !url.trim() || url.length > 4_096) throw new TypeError('Invalid creator source URL');
-    return creatorSourceResolver.resolve(url);
+    return resolveCreatorSource(url);
   });
   ipcMain.handle('creator:follow', async (event, url: unknown) => {
     assertTrustedSender(event);
     if (typeof url !== 'string' || !url.trim() || url.length > 4_096) throw new TypeError('Invalid creator feed URL');
-    const resolution = await creatorSourceResolver.resolve(url);
+    const resolution = await resolveCreatorSource(url);
     if (resolution.status !== 'ready' || !resolution.feedUrl) throw new Error(resolution.message);
     const followed = await requireCreatorTracker().follow(resolution.feedUrl);
     await requireRepository().rebuildIndex();
@@ -429,6 +463,29 @@ function registerIpc(): void {
     assertTrustedSender(event);
     if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
     return requireCreatorTracker().history(id);
+  });
+  ipcMain.handle('creator:get-youtube-api-settings', (event) => {
+    assertTrustedSender(event);
+    return requireYouTubeCreatorApi().settings();
+  });
+  ipcMain.handle('creator:save-youtube-api-settings', async (event, apiKey: unknown) => {
+    assertTrustedSender(event);
+    if (typeof apiKey !== 'string' || apiKey.length > 4_096) throw new TypeError('Invalid YouTube Data API Key');
+    return requireYouTubeCreatorApi().configure(apiKey);
+  });
+  ipcMain.handle('creator:clear-youtube-api-key', async (event) => {
+    assertTrustedSender(event);
+    return requireYouTubeCreatorApi().clear();
+  });
+  ipcMain.handle('creator:sync-youtube-history', async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (typeof id !== 'string' || !/^creator-[a-f0-9]{16}$/u.test(id)) throw new TypeError('Invalid creator id');
+    const creator = (await requireCreatorTracker().list()).find((item) => item.id === id);
+    if (!creator) throw new Error('未找到该关注。');
+    const snapshot = await requireYouTubeCreatorApi().fetchHistory(creator.feedUrl);
+    const updated = await requireCreatorTracker().importOfficialHistory(id, snapshot);
+    await requireRepository().rebuildIndex();
+    return updated;
   });
   ipcMain.handle('creator:open-entry-url', async (event, url: unknown) => {
     assertTrustedSender(event);
@@ -1116,6 +1173,7 @@ void app.whenReady().then(async () => {
     osSecretEncryption,
   );
   await sessionSecrets.initialize();
+  youtubeCreatorApi = new YouTubeCreatorApiService(youtubeDataApiConnector, sessionSecrets);
   onlineAI = new OnlineAIService(
     new OnlineAIConfigStore(join(app.getPath('userData'), 'device', 'online-ai.json')),
     sessionSecrets,

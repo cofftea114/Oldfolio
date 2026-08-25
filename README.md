@@ -24,6 +24,10 @@ bundles, media-derived notes, and user-controlled AI providers.
   channel metadata are resolved to the platform's public Atom Feed; the UI makes clear that this Feed
   contains recent entries rather than guaranteed complete history. Other platform homepages without a
   public Feed report the official-API authorization requirement instead of falling back to scraping.
+- Optional YouTube Data API BYOK support resolves `@handle` channels and imports the public uploads
+  playlist with official pagination. The API key is sent in the `X-Goog-Api-Key` header and stored only
+  through the device secret store; each creator currently retains up to 2,000 API history entries and
+  every import is preserved as an immutable Creator Source snapshot.
 - Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Public HTTPS audio/video direct-link import with bounded streaming download, embedded-subtitle
   preference, resumable online speech transcription, and explicit provider disclosure.
@@ -106,6 +110,19 @@ directory. Each online provider has an independent credential slot, so switching
 overwrite another provider's key. Windows uses DPAPI and macOS uses Keychain; if secure OS encryption is unavailable, Oldfolio
 falls back to current-session memory and does not write plaintext. Credentials never enter the Vault,
 SQLite index, WebDAV data, ordinary configuration, or logs, and can be cleared from the settings UI.
+
+## YouTube creator history
+
+1. In Google Cloud Console, create or select a project, enable **YouTube Data API v3**, and create an
+   API key. Restrict that key to the YouTube Data API where possible.
+2. Open **Import** → **YouTube history backfill (official Data API)**, enter the key, and save it to the
+   device secret store. It is not written to the Vault or synchronized to another device.
+3. Follow a YouTube channel through its homepage or public Feed, then choose **Backfill history via API**
+   on that creator. Oldfolio calls `channels.list` once and walks the uploads playlist with
+   `playlistItems.list` pages of up to 50 items, retaining at most 2,000 entries in the current v1 store.
+
+This is a public-data API-key flow, not OAuth access to private account data. API use consumes the
+quota of the user's Google Cloud project.
 
 ## Online media analysis
 

@@ -4,6 +4,7 @@ import type {
   SourceConnector,
   SourceFetchRequest,
   SourceInput,
+  SourceInvocationContext,
   SourceProbeResult,
   SourceSnapshot,
 } from '@oldfolio/domain';
@@ -17,6 +18,7 @@ export type {
   SourceDeletionPolicy,
   SourceFetchRequest,
   SourceInput,
+  SourceInvocationContext,
   SourceProbeResult,
   SourceRetentionPolicy,
   SourceSnapshot,
@@ -85,7 +87,7 @@ export class SourceConnectorRegistry {
   async fetch(
     connectorId: string,
     request: SourceFetchRequest,
-    context?: OperationContext,
+    context?: SourceInvocationContext,
   ): Promise<SourceSnapshot> {
     const connector = this.#connectors.get(connectorId);
     if (!connector) throw new Error(`Unknown source connector: ${connectorId}`);

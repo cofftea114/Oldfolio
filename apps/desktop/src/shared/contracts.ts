@@ -51,6 +51,10 @@ export interface CreatorSubscriptionSummary {
   lastSnapshotId: string;
   lastNewEntryCount: number;
   entryCount: number;
+  historySource: 'feed' | 'youtube_data_api';
+  historyFetchedAt?: string;
+  historyComplete?: boolean;
+  historyTotalResults?: number;
   lastError?: string;
 }
 
@@ -76,6 +80,13 @@ export interface CreatorSourceResolutionSummary {
   title?: string;
   entryCount?: number;
   message: string;
+}
+
+export interface YouTubeCreatorApiSettingsSummary {
+  endpointHost: 'www.googleapis.com';
+  keyAvailable: boolean;
+  keyPersisted: boolean;
+  maxHistoryEntries: 2_000;
 }
 
 export interface CaptionImportResult {
@@ -370,6 +381,10 @@ export interface OldfolioDesktopApi {
   refreshCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary>;
   refreshAllCreatorSubscriptions(): Promise<CreatorSubscriptionSummary[]>;
   getCreatorHistory(id: string): Promise<CreatorFeedEntrySummary[]>;
+  getYouTubeCreatorApiSettings(): Promise<YouTubeCreatorApiSettingsSummary>;
+  saveYouTubeCreatorApiSettings(apiKey: string): Promise<YouTubeCreatorApiSettingsSummary>;
+  clearYouTubeCreatorApiKey(): Promise<YouTubeCreatorApiSettingsSummary>;
+  syncYouTubeCreatorHistory(id: string): Promise<CreatorSubscriptionSummary>;
   openCreatorEntryUrl(url: string): Promise<void>;
   removeCreatorSubscription(id: string): Promise<CreatorSubscriptionSummary[]>;
   importCaptions(): Promise<CaptionImportResult>;

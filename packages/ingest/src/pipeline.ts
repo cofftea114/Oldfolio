@@ -3,6 +3,7 @@ import type {
   SourceConnector,
   SourceFetchRequest,
   SourceInput,
+  SourceInvocationContext,
   SourceProbeResult,
   SourceSnapshot,
 } from '@oldfolio/domain';
@@ -41,7 +42,7 @@ export class IngestionPipeline {
   async ingest(
     connectorId: string,
     request: SourceFetchRequest,
-    context?: OperationContext,
+    context?: SourceInvocationContext,
   ): Promise<IngestionResult> {
     const connector = this.#connectors.get(connectorId);
     if (!connector) throw new Error(`Unknown source connector: ${connectorId}`);
