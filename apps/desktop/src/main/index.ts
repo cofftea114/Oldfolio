@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session, shell } from 'electron';
@@ -21,7 +22,14 @@ import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './clou
 import { CreatorTrackerService } from './creator-tracker.js';
 import { DeviceSecretStore, type SecretEncryption } from './device-secret-store.js';
 import { classifyDocumentPath } from './document-presentation.js';
-import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
+import {
+  matchLocalMediaFile,
+  resolveLocalMediaAssociation,
+  type CreatorHistoryCatalog,
+  type LocalMediaAssociation,
+  type LocalMediaCreatorMatch,
+} from './local-media-batch.js';
+import { queueMediaTranscription, resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 import { handleVaultMediaRequest, mediaPlaybackUrl } from './media-protocol.js';
 import { detectPlatformMediaUrl, downloadPlatformMedia, extractSharedMediaUrl } from './platform-media.js';
 import { downloadRemoteMediaAsset } from './remote-media.js';
@@ -31,7 +39,12 @@ import {
 } from './online-ai.js';
 import type { OnlineSummaryPreset } from './online-ai.js';
 import { YouTubeCreatorApiService } from './youtube-creator-api.js';
-import { resumeOnlineMediaTranscription, transcribeCloudMediaFile, transcribeOnlineMediaUrl } from './online-media-transcription.js';
+import {
+  queueCloudMediaTranscription,
+  resumeOnlineMediaTranscription,
+  transcribeCloudMediaFile,
+  transcribeOnlineMediaUrl,
+} from './online-media-transcription.js';
 import type {
   DocumentSummary,
   OldfolioDesktopApi,
@@ -54,7 +67,26 @@ let cloudTranscription: CloudTranscriptionService | null = null;
 let creatorTracker: CreatorTrackerService | null = null;
 let youtubeCreatorApi: YouTubeCreatorApiService | null = null;
 let creatorRefreshTimer: ReturnType<typeof setInterval> | null = null;
+interface PendingLocalMediaBatchItem {
+  readonly id: string;
+  readonly path: string;
+  readonly fileName: string;
+  readonly byteLength: number;
+  readonly modifiedAtMs: number;
+  readonly matches: readonly LocalMediaCreatorMatch[];
+}
+interface PendingLocalMediaBatch {
+  readonly id: string;
+  readonly vaultRoot: string;
+  readonly createdAtMs: number;
+  readonly items: readonly PendingLocalMediaBatchItem[];
+  readonly catalogs: readonly CreatorHistoryCatalog[];
+}
+const pendingLocalMediaBatches = new Map<string, PendingLocalMediaBatch>();
+let batchMediaQueueRunning = false;
 const activeMediaTasks = new Set<AbortController>();
+const activeBatchMediaControllers = new Map<string, AbortController>();
+const activeBatchMediaPromises = new Map<string, Promise<void>>();
 const activeAITasks = new Set<AbortController>();
 const startupProbe = process.argv.includes('--oldfolio-startup-probe');
 const rssConnector = new RssSourceConnector();
@@ -104,6 +136,62 @@ function requireMediaJobs(): MediaJobStore {
 function requireMediaDeviceConfig(): MediaDeviceConfigStore {
   if (!mediaDeviceConfig) throw new Error('媒体设备配置尚未初始化');
   return mediaDeviceConfig;
+}
+
+async function drainBatchMediaQueue(): Promise<void> {
+  if (batchMediaQueueRunning || !repository || !mediaJobs || !mediaDeviceConfig || !cloudTranscription) return;
+  batchMediaQueueRunning = true;
+  const targetRepository = repository;
+  const targetJobs = mediaJobs;
+  const targetDeviceConfig = mediaDeviceConfig;
+  const targetCloudTranscription = cloudTranscription;
+  try {
+    while (repository === targetRepository) {
+      const queued = (await targetJobs.list())
+        .filter((job) => job.stage === 'queued' && Boolean(job.request?.batchId))
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+      if (!queued) break;
+      const controller = new AbortController();
+      activeMediaTasks.add(controller);
+      activeBatchMediaControllers.set(queued.id, controller);
+      const processing = (async () => {
+        if (queued.request?.kind === 'online_transcription') {
+          await resumeOnlineMediaTranscription(
+            targetRepository,
+            targetJobs,
+            targetDeviceConfig,
+            targetCloudTranscription,
+            queued.id,
+            { signal: controller.signal },
+          );
+        } else {
+          await resumeMediaTranscription(
+            targetRepository,
+            targetJobs,
+            targetDeviceConfig,
+            queued.id,
+            { signal: controller.signal },
+          );
+        }
+      })();
+      activeBatchMediaPromises.set(queued.id, processing.then(() => undefined, () => undefined));
+      try {
+        await processing;
+      } catch {
+        // Resume functions persist a per-item failure. Continue so one bad file cannot block the batch.
+      } finally {
+        activeMediaTasks.delete(controller);
+        activeBatchMediaControllers.delete(queued.id);
+        activeBatchMediaPromises.delete(queued.id);
+      }
+    }
+  } finally {
+    batchMediaQueueRunning = false;
+  }
+}
+
+function scheduleBatchMediaQueue(): void {
+  queueMicrotask(() => void drainBatchMediaQueue());
 }
 
 function requireAIDeviceConfig(): AIDeviceConfigStore {
@@ -291,6 +379,7 @@ async function readDocument(path: string): Promise<VaultDocument> {
 
 async function openRepository(root: string, initialize: boolean): Promise<VaultSummary> {
   stopCreatorRefreshSchedule();
+  pendingLocalMediaBatches.clear();
   repository?.close();
   repository = await VaultRepository.open(root);
   if (initialize) await repository.initialize();
@@ -314,6 +403,7 @@ async function openRepository(root: string, initialize: boolean): Promise<VaultS
   await mediaJobs.initialize();
   await repository.rebuildIndex();
   startCreatorRefreshSchedule();
+  scheduleBatchMediaQueue();
   const documents = await repository.scanDocuments();
   return { root, name: parse(root).name, documentCount: documents.length };
 }
@@ -618,6 +708,172 @@ function registerIpc(): void {
     await requireMediaDeviceConfig().addModel(model);
     return mediaSettingsSummary();
   });
+  ipcMain.handle('media:prepare-local-batch', async (event) => {
+    assertTrustedSender(event);
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '批量选择已经下载好的音视频',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '音视频', extensions: ['aac', 'flac', 'm4a', 'mkv', 'mov', 'mp3', 'mp4', 'mpeg', 'mpg', 'ogg', 'opus', 'wav', 'webm'] }],
+      buttonLabel: '检查关联关系',
+    });
+    if (selection.canceled || selection.filePaths.length === 0) return { cancelled: true, creators: [], items: [] };
+    if (selection.filePaths.length > 100) throw new Error('单次最多批量导入 100 个音视频文件。');
+    const now = Date.now();
+    for (const [id, batch] of pendingLocalMediaBatches) {
+      if (now - batch.createdAtMs > 30 * 60_000) pendingLocalMediaBatches.delete(id);
+    }
+    const catalogs = await requireCreatorTracker().historyCatalog();
+    const items: PendingLocalMediaBatchItem[] = [];
+    for (const path of selection.filePaths) {
+      const status = await lstat(path);
+      if (!status.isFile() || status.isSymbolicLink() || status.size <= 0) {
+        throw new Error(`批量选择中包含无效文件：${basename(path)}`);
+      }
+      const fileName = basename(path);
+      items.push({
+        id: randomUUID(),
+        path,
+        fileName,
+        byteLength: status.size,
+        modifiedAtMs: status.mtimeMs,
+        matches: matchLocalMediaFile(fileName, catalogs),
+      });
+    }
+    const batch: PendingLocalMediaBatch = {
+      id: randomUUID(),
+      vaultRoot: requireRepository().root,
+      createdAtMs: now,
+      items,
+      catalogs,
+    };
+    pendingLocalMediaBatches.set(batch.id, batch);
+    return {
+      cancelled: false,
+      id: batch.id,
+      creators: batch.catalogs
+        .map((catalog) => ({ id: catalog.creatorId, title: catalog.creatorTitle }))
+        .sort((left, right) => left.title.localeCompare(right.title)),
+      items: batch.items.map((item) => ({
+        id: item.id,
+        fileName: item.fileName,
+        byteLength: item.byteLength,
+        matches: item.matches.map((match) => ({
+          creatorId: match.creatorId,
+          creatorTitle: match.creatorTitle,
+          creatorEntryId: match.creatorEntryId,
+          entryTitle: match.entryTitle,
+          matchKind: match.matchKind,
+          ...(match.mediaId ? { mediaId: match.mediaId } : {}),
+        })),
+      })),
+    };
+  });
+  ipcMain.handle('media:start-local-batch', async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new TypeError('Invalid local media batch request');
+    const value = input as Record<string, unknown>;
+    if (
+      typeof value.preparationId !== 'string'
+      || (value.executionTarget !== 'local' && value.executionTarget !== 'online')
+      || (value.modelId !== undefined && typeof value.modelId !== 'string')
+      || (value.language !== undefined && typeof value.language !== 'string')
+      || !Array.isArray(value.associations)
+    ) throw new TypeError('Invalid local media batch request');
+    const batch = pendingLocalMediaBatches.get(value.preparationId);
+    if (!batch || batch.vaultRoot !== requireRepository().root || Date.now() - batch.createdAtMs > 30 * 60_000) {
+      pendingLocalMediaBatches.delete(value.preparationId);
+      throw new Error('批量导入预览已过期，请重新选择文件。');
+    }
+    if (value.associations.length > batch.items.length) throw new TypeError('Invalid local media batch associations');
+    const currentCatalogs = await requireCreatorTracker().historyCatalog();
+    const associations = new Map<string, LocalMediaAssociation>();
+    for (const association of value.associations) {
+      if (typeof association !== 'object' || association === null || Array.isArray(association)) {
+        throw new TypeError('Invalid local media batch association');
+      }
+      const candidate = association as Record<string, unknown>;
+      if (
+        typeof candidate.itemId !== 'string'
+        || typeof candidate.creatorId !== 'string'
+        || (candidate.creatorEntryId !== undefined && typeof candidate.creatorEntryId !== 'string')
+        || associations.has(candidate.itemId)
+      ) throw new TypeError('Invalid local media batch association');
+      const item = batch.items.find((entry) => entry.id === candidate.itemId);
+      if (!item) throw new Error('批量媒体条目不在当前预览中。');
+      associations.set(candidate.itemId, resolveLocalMediaAssociation(
+        item.matches,
+        currentCatalogs,
+        candidate.creatorId,
+        typeof candidate.creatorEntryId === 'string' ? candidate.creatorEntryId : undefined,
+      ));
+    }
+    const language = typeof value.language === 'string' && value.language.trim() && value.language.trim() !== 'auto'
+      ? value.language.trim().slice(0, 64)
+      : undefined;
+    if (value.executionTarget === 'local') {
+      if (typeof value.modelId !== 'string' || !value.modelId.trim()) throw new Error('本地批量转录需要选择 Whisper 模型。');
+      const config = await requireMediaDeviceConfig().load();
+      if (!config.ffmpegPath || !config.whisperPath) throw new Error('请先配置 FFmpeg 与 whisper-cli。');
+      if (!config.models.some((model) => model.id === value.modelId)) throw new Error(`本机未安装模型：${value.modelId}`);
+    } else {
+      const config = await requireMediaDeviceConfig().load();
+      if (!config.ffmpegPath) throw new Error('在线批量转录仍需要本机 FFmpeg。');
+      await requireCloudTranscription().runtime();
+    }
+    const results: Array<{ itemId: string; fileName: string; jobId?: string; error?: string }> = [];
+    for (const item of batch.items) {
+      try {
+        const status = await lstat(item.path);
+        if (!status.isFile() || status.isSymbolicLink() || status.size !== item.byteLength || status.mtimeMs !== item.modifiedAtMs) {
+          throw new Error('文件在关联确认后发生了变化，请重新选择。');
+        }
+        const match = associations.get(item.id);
+        const creatorTarget = match ? {
+          sourceTitle: match.entryTitle ?? item.fileName,
+          targetBundleRoot: `bundles/creators/${match.creatorId}`,
+          creatorId: match.creatorId,
+          creatorTitle: match.creatorTitle,
+          ...(match.creatorEntryId ? { creatorEntryId: match.creatorEntryId } : {}),
+          ...(match.sourceUrl ? { importedFrom: match.sourceUrl } : {}),
+        } : {};
+        const queued = value.executionTarget === 'local'
+          ? await queueMediaTranscription(
+              requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(),
+              {
+                mediaPath: item.path,
+                vaultRoot: requireRepository().root,
+                modelId: value.modelId as string,
+                ...creatorTarget,
+                ...(language ? { language } : {}),
+              },
+              { id: batch.id, itemId: item.id },
+            )
+          : await queueCloudMediaTranscription(
+              requireRepository(), requireMediaJobs(), requireMediaDeviceConfig(), requireCloudTranscription(),
+              {
+                mediaPath: item.path,
+                ...creatorTarget,
+                ...(language ? { language } : {}),
+              },
+              { id: batch.id, itemId: item.id },
+            );
+        results.push({ itemId: item.id, fileName: item.fileName, jobId: queued.jobId });
+      } catch (error) {
+        results.push({
+          itemId: item.id,
+          fileName: item.fileName,
+          error: error instanceof Error ? error.message : '无法加入批量转录队列',
+        });
+      }
+    }
+    pendingLocalMediaBatches.delete(batch.id);
+    scheduleBatchMediaQueue();
+    return {
+      queuedCount: results.filter((item) => item.jobId).length,
+      failedCount: results.filter((item) => item.error).length,
+      jobs: results,
+    };
+  });
   ipcMain.handle('media:transcribe', async (event, input: unknown) => {
     assertTrustedSender(event);
     if (typeof input !== 'object' || input === null) throw new TypeError('Invalid transcription request');
@@ -810,28 +1066,61 @@ function registerIpc(): void {
       return {
       id: job.id,
       sourceUri: job.sourceUri,
+      title: job.request?.sourceTitle ?? basename(job.sourceUri),
+      executionTarget: job.request?.kind === 'online_transcription' ? 'online' : 'local',
+      ...(job.request?.batchId ? { batchId: job.request.batchId } : {}),
+      ...(job.request?.creatorTitle ? { creatorTitle: job.request.creatorTitle } : {}),
       stage: job.stage,
       progress: job.checkpoints.at(-1)?.progress ?? 0,
       updatedAt: job.updatedAt,
       attempts: job.attempts,
       completedChunks,
       ...(chunkCount !== undefined ? { chunkCount } : {}),
-      canRetry: Boolean(job.request) && (job.stage === 'queued' || (job.stage === 'failed' && job.error?.retryable)),
-      canDelete: job.stage === 'failed',
+      canRetry: Boolean(job.request) && (
+        (job.stage === 'queued' && !job.request?.batchId)
+        || (job.stage === 'failed' && job.error?.retryable)
+      ),
+      canCancel: Boolean(job.request?.batchId) && !['completed', 'failed', 'cancelled'].includes(job.stage),
+      canDelete: job.stage === 'failed' || job.stage === 'cancelled',
       ...(job.error ? { error: job.error.message } : {}),
       };
     });
+  });
+  ipcMain.handle('media:cancel-job', async (event, jobId: unknown) => {
+    assertTrustedSender(event);
+    if (typeof jobId !== 'string') throw new TypeError('Invalid media job id');
+    const jobs = requireMediaJobs();
+    const job = await jobs.get(jobId);
+    if (!job.request?.batchId || ['completed', 'failed', 'cancelled'].includes(job.stage)) {
+      throw new Error('该任务当前不能停止。');
+    }
+    const confirmation = await dialog.showMessageBox(mainWindow!, {
+      type: 'warning',
+      title: '停止转录任务',
+      message: `确定停止“${job.request.sourceTitle}”吗？`,
+      detail: '只停止这一项；同一批次中的其他任务不受影响。停止后可以删除任务记录，Vault 中已经导入的原始媒体不会被删除。',
+      buttons: ['停止此任务', '继续转录'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirmation.response !== 0) return { cancelled: true };
+    activeBatchMediaControllers.get(jobId)?.abort(new Error('用户停止了此转录任务。'));
+    await activeBatchMediaPromises.get(jobId);
+    const current = await jobs.get(jobId);
+    if (current.stage !== 'completed' && current.stage !== 'cancelled') await jobs.cancel(jobId);
+    return { cancelled: false };
   });
   ipcMain.handle('media:delete-job', async (event, jobId: unknown) => {
     assertTrustedSender(event);
     if (typeof jobId !== 'string') throw new TypeError('Invalid media job id');
     const jobs = requireMediaJobs();
     const job = await jobs.get(jobId);
-    if (job.stage !== 'failed') throw new Error('只能删除失败的转录任务。');
+    if (job.stage !== 'failed' && job.stage !== 'cancelled') throw new Error('只能删除失败或已停止的转录任务。');
     const confirmation = await dialog.showMessageBox(mainWindow!, {
       type: 'warning',
-      title: '删除失败的转录任务',
-      message: '确定删除这条失败任务吗？',
+      title: '删除转录任务记录',
+      message: '确定删除这条任务记录吗？',
       detail: '将删除任务记录和中间缓存，但不会删除原始音视频、来源笔记或转录笔记。',
       buttons: ['删除任务', '取消'],
       defaultId: 1,
@@ -844,7 +1133,7 @@ function registerIpc(): void {
     const cacheChild = relative(cacheRoot, cachePath);
     if (!cacheChild || cacheChild.startsWith('..') || isAbsolute(cacheChild)) throw new Error('任务缓存路径越出了 Vault。');
     await rm(cachePath, { recursive: true, force: true });
-    await jobs.deleteFailed(job.id);
+    await jobs.deleteTerminal(job.id);
     return { cancelled: false };
   });
   ipcMain.handle('media:retry-job', async (event, jobId: unknown) => {
@@ -1149,7 +1438,7 @@ function createWindow(): void {
       void mainWindow?.webContents.executeJavaScript(`new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const api = window.oldfolio;
-          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'probeCreatorSource', 'followCreatorFeed', 'getCreatorHistory', 'generateCreatorTitleGraph', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
+          const required = ['createVault', 'chooseVault', 'chooseMediaTool', 'importWhisperModel', 'prepareLocalMediaBatch', 'startLocalMediaBatch', 'cancelMediaJob', 'transcribeOnlineMedia', 'transcribeOnlineMediaLocally', 'listCreatorSubscriptions', 'probeCreatorSource', 'followCreatorFeed', 'getCreatorHistory', 'generateCreatorTitleGraph', 'openCreatorEntryUrl', 'getAISettings', 'getOnlineAISettings', 'getCloudTranscriptionSettings', 'prepareAISummary', 'prepareAIConcepts', 'prepareWikiQuestion', 'applyAIChangeSet'];
           const reader = document.querySelector('.markdown-reader');
           if (reader) reader.innerHTML = Array.from({ length: 180 }, (_, index) => '<p>Scroll probe paragraph ' + index + '</p>').join('');
           const clientHeight = reader?.clientHeight ?? 0;

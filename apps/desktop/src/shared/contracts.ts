@@ -162,11 +162,16 @@ export interface MediaSettingsSummary {
 export interface MediaJobSummary {
   id: string;
   sourceUri: string;
+  title: string;
+  executionTarget: 'local' | 'online';
+  batchId?: string;
+  creatorTitle?: string;
   stage: string;
   progress: number;
   updatedAt: string;
   error?: string;
   canRetry: boolean;
+  canCancel: boolean;
   canDelete: boolean;
   attempts: number;
   completedChunks: number;
@@ -178,6 +183,40 @@ export interface MediaTranscriptionResult {
   jobId?: string;
   transcript?: VaultDocument;
   transcriptSource?: 'embedded_subtitle' | 'speech_recognition';
+}
+
+export interface LocalMediaBatchCreatorMatchSummary {
+  creatorId: string;
+  creatorTitle: string;
+  creatorEntryId: string;
+  entryTitle: string;
+  mediaId?: string;
+  matchKind: 'platform-id' | 'exact-title';
+}
+
+export interface LocalMediaBatchItemSummary {
+  id: string;
+  fileName: string;
+  byteLength: number;
+  matches: readonly LocalMediaBatchCreatorMatchSummary[];
+}
+
+export interface LocalMediaBatchPreparation {
+  cancelled: boolean;
+  id?: string;
+  creators: readonly { id: string; title: string }[];
+  items: readonly LocalMediaBatchItemSummary[];
+}
+
+export interface LocalMediaBatchQueueResult {
+  queuedCount: number;
+  failedCount: number;
+  jobs: readonly {
+    itemId: string;
+    fileName: string;
+    jobId?: string;
+    error?: string;
+  }[];
 }
 
 export interface TranscriptPlaybackSegment {
@@ -437,6 +476,18 @@ export interface OldfolioDesktopApi {
     expectedSha256?: string;
   }): Promise<MediaSettingsSummary>;
   transcribeMedia(input: { modelId: string; language?: string }): Promise<MediaTranscriptionResult>;
+  prepareLocalMediaBatch(): Promise<LocalMediaBatchPreparation>;
+  startLocalMediaBatch(input: {
+    preparationId: string;
+    executionTarget: 'local' | 'online';
+    modelId?: string;
+    language?: string;
+    associations: readonly {
+      itemId: string;
+      creatorId: string;
+      creatorEntryId?: string;
+    }[];
+  }): Promise<LocalMediaBatchQueueResult>;
   transcribeOnlineMediaLocally(input: {
     url: string;
     modelId: string;
@@ -454,6 +505,7 @@ export interface OldfolioDesktopApi {
     creatorEntryId?: string;
   }): Promise<MediaTranscriptionResult>;
   retryMediaJob(jobId: string): Promise<MediaTranscriptionResult>;
+  cancelMediaJob(jobId: string): Promise<{ cancelled: boolean }>;
   deleteMediaJob(jobId: string): Promise<{ cancelled: boolean }>;
   listMediaJobs(): Promise<MediaJobSummary[]>;
   getTranscriptPlayback(path: string): Promise<TranscriptPlaybackSummary | null>;

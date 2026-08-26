@@ -119,9 +119,31 @@ export class MediaJobStore {
     return updated;
   }
 
+  async cancel(id: string): Promise<MediaJobRecord> {
+    const current = await this.get(id);
+    if (current.stage === 'completed' || current.stage === 'cancelled') throw new Error('Terminal media jobs cannot be cancelled.');
+    const updatedAt = this.#now().toISOString();
+    const { error: _previousError, ...currentWithoutError } = current;
+    void _previousError;
+    const updated: MediaJobRecord = {
+      ...currentWithoutError,
+      stage: 'cancelled',
+      updatedAt,
+      checkpoints: [...current.checkpoints, { stage: 'cancelled', progress: current.checkpoints.at(-1)?.progress ?? 0, updatedAt }],
+    };
+    await this.save(updated);
+    return updated;
+  }
+
   async deleteFailed(id: string): Promise<MediaJobRecord> {
     const current = await this.get(id);
     if (current.stage !== 'failed') throw new Error('Only failed media jobs can be deleted.');
+    return this.deleteTerminal(id);
+  }
+
+  async deleteTerminal(id: string): Promise<MediaJobRecord> {
+    const current = await this.get(id);
+    if (current.stage !== 'failed' && current.stage !== 'cancelled') throw new Error('Only failed or cancelled media jobs can be deleted.');
     await rm(join(this.#directory, `${current.id}.json`));
     return current;
   }

@@ -43,6 +43,13 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Per-device FFmpeg/ffprobe/whisper.cpp configuration and user-approved local model import; no
   binaries or models are bundled or synchronized. Local transcription runs in verified 15-minute
   chunks and can continue from completed chunks after an interruption.
+- Batch-select up to 100 already-downloaded local audio/video files for either local Whisper or the
+  configured online transcription provider. Filename platform IDs or normalized exact titles can
+  suggest matches against followed creator history, but every destination remains user-confirmed. Users can also assign
+  one followed creator to the whole batch and override individual files without inventing a creator-history entry. Files are copied into
+  content-addressed Vault assets before persistent jobs are created; the background queue runs one at
+  a time, resumes interrupted queued batches after startup, isolates per-file failures, and lets each
+  queued or active batch item be stopped independently before its task metadata is deleted.
 - Embedded audio/video playback for content-addressed Vault media, with HTTP Range seeking and a
   clickable transcript timeline that follows the current playback position.
 - Desktop RSS/Podcast import UI with bounded, credential-free remote fetching.

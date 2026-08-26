@@ -43,6 +43,7 @@ import type {
   CreatorSubscriptionSummary,
   CreatorTitleGraphSummary,
   DocumentSummary,
+  LocalMediaBatchPreparation,
   MediaJobSummary,
   MediaSettingsSummary,
   OnlineAISettingsSummary,
@@ -172,6 +173,9 @@ export function App() {
   const [importing, setImporting] = useState(false);
   const [mediaSettings, setMediaSettings] = useState<MediaSettingsSummary | null>(null);
   const [mediaJobs, setMediaJobs] = useState<MediaJobSummary[]>([]);
+  const [localMediaBatch, setLocalMediaBatch] = useState<LocalMediaBatchPreparation | null>(null);
+  const [localMediaBatchAssociations, setLocalMediaBatchAssociations] = useState<Record<string, string>>({});
+  const [localMediaBatchDefault, setLocalMediaBatchDefault] = useState('auto');
   const [modelId, setModelId] = useState('base');
   const [modelLicense, setModelLicense] = useState('');
   const [modelSource, setModelSource] = useState('https://huggingface.co/ggerganov/whisper.cpp');
@@ -268,6 +272,10 @@ export function App() {
     setCreatorTitleGraphs({});
     setActiveCreatorGraphId('');
     setExpandedCreatorId('');
+    setLocalMediaBatch(null);
+    setLocalMediaBatchAssociations({});
+    setLocalMediaBatchDefault('auto');
+    setMediaJobs([]);
     setSummaryPreparation(null);
     setPendingSummary(null);
     setConceptPreparation(null);
@@ -379,11 +387,12 @@ export function App() {
     if (!next || !vault) return;
     setAIError('');
     try {
-      const [settings, onlineSettings, cloudSettings, currentMediaSettings] = await Promise.all([
+      const [settings, onlineSettings, cloudSettings, currentMediaSettings, currentMediaJobs] = await Promise.all([
         window.oldfolio.getAISettings(),
         window.oldfolio.getOnlineAISettings(),
         window.oldfolio.getCloudTranscriptionSettings(),
         window.oldfolio.getMediaSettings(),
+        window.oldfolio.listMediaJobs(),
       ]);
       setAISettings(settings);
       setAIProvider(settings.providerId);
@@ -405,6 +414,7 @@ export function App() {
       }
       setOnlineHostConfirmed(false);
       setMediaSettings(currentMediaSettings);
+      setMediaJobs(currentMediaJobs);
     } catch (error: unknown) {
       setAIError(error instanceof Error ? error.message : '无法读取 AI 配置');
     }
@@ -1122,6 +1132,87 @@ export function App() {
     }
   };
 
+  const prepareLocalMediaBatch = async () => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      const preparation = await window.oldfolio.prepareLocalMediaBatch();
+      if (preparation.cancelled || !preparation.id) {
+        setStatus('已取消批量导入');
+        return;
+      }
+      setLocalMediaBatch(preparation);
+      setLocalMediaBatchAssociations(Object.fromEntries(preparation.items.map((item) => [
+        item.id,
+        item.matches[0] ? 'match:0' : '',
+      ])));
+      setLocalMediaBatchDefault('auto');
+      const matched = preparation.items.filter((item) => item.matches.length > 0).length;
+      setStatus(`已选择 ${preparation.items.length} 个文件，其中 ${matched} 个找到博主历史关联；请确认后入队`);
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '无法准备本地媒体批量导入');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const applyLocalMediaBatchDefault = (value: string) => {
+    setLocalMediaBatchDefault(value);
+    if (!localMediaBatch) return;
+    setLocalMediaBatchAssociations(Object.fromEntries(localMediaBatch.items.map((item) => {
+      if (value === 'auto') return [item.id, item.matches[0] ? 'match:0' : ''];
+      if (value === 'personal') return [item.id, ''];
+      return [item.id, value];
+    })));
+  };
+
+  const startLocalMediaBatch = async () => {
+    if (!vault || !localMediaBatch?.id || importing) return;
+    setImporting(true);
+    setImportError('');
+    setAIError('');
+    setStatus('正在把本地媒体复制到 Vault 并建立持久化队列…');
+    try {
+      const associations = localMediaBatch.items.flatMap((item) => {
+        const selected = localMediaBatchAssociations[item.id];
+        if (selected === undefined || selected === '') return [];
+        if (selected.startsWith('match:')) {
+          const match = item.matches[Number(selected.slice('match:'.length))];
+          return match ? [{
+            itemId: item.id,
+            creatorId: match.creatorId,
+            creatorEntryId: match.creatorEntryId,
+          }] : [];
+        }
+        if (selected.startsWith('creator:')) {
+          return [{ itemId: item.id, creatorId: selected.slice('creator:'.length) }];
+        }
+        return [];
+      });
+      const result = await window.oldfolio.startLocalMediaBatch({
+        preparationId: localMediaBatch.id,
+        executionTarget: transcriptionExecutionTarget,
+        ...(transcriptionExecutionTarget === 'local' ? { modelId: selectedModel } : {}),
+        ...(mediaLanguage.trim() && mediaLanguage.trim() !== 'auto' ? { language: mediaLanguage.trim() } : {}),
+        associations,
+      });
+      setLocalMediaBatch(null);
+      setLocalMediaBatchAssociations({});
+      setLocalMediaBatchDefault('auto');
+      await refreshMedia();
+      const failedMessage = result.failedCount > 0 ? `；${result.failedCount} 个文件未能入队` : '';
+      setStatus(`已加入 ${result.queuedCount} 个持久化转录任务${failedMessage}，队列会逐个处理`);
+      const errors = result.jobs.filter((item) => item.error).map((item) => `${item.fileName}：${item.error}`);
+      if (errors.length > 0) setImportError(errors.join('\n'));
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '批量媒体无法加入转录队列');
+      setStatus('批量入队失败，关联预览仍保留');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const transcribeMedia = async () => {
     if (!vault || !selectedModel || importing) return;
     setImporting(true);
@@ -1295,7 +1386,7 @@ export function App() {
         return;
       }
       await refreshMedia();
-      setStatus('失败的转录任务及其中间缓存已删除');
+      setStatus('转录任务记录及其中间缓存已删除');
     } catch (error: unknown) {
       setImportError(error instanceof Error ? error.message : '删除转录任务失败');
       setStatus('删除转录任务失败');
@@ -1303,6 +1394,43 @@ export function App() {
       setImporting(false);
     }
   };
+
+  const cancelMediaJob = async (jobId: string) => {
+    if (!vault || importing) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      const result = await window.oldfolio.cancelMediaJob(jobId);
+      if (result.cancelled) {
+        setStatus('已继续保留转录任务');
+        return;
+      }
+      await refreshMedia();
+      setStatus('已停止所选转录任务；同批次其他任务会继续');
+    } catch (error: unknown) {
+      setImportError(error instanceof Error ? error.message : '停止转录任务失败');
+      setStatus('停止转录任务失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const batchQueueActive = mediaJobs.some((job) => (
+    Boolean(job.batchId) && !['completed', 'failed', 'cancelled'].includes(job.stage)
+  ));
+
+  useEffect(() => {
+    if (!vault || !batchQueueActive) return;
+    const interval = window.setInterval(() => {
+      void window.oldfolio.listMediaJobs().then(async (jobs) => {
+        setMediaJobs(jobs);
+        if (!jobs.some((job) => Boolean(job.batchId) && !['completed', 'failed', 'cancelled'].includes(job.stage))) {
+          await loadDocuments();
+        }
+      });
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [batchQueueActive, loadDocuments, vault]);
 
   useEffect(() => {
     const timeout = window.setTimeout(async () => {
@@ -1562,6 +1690,68 @@ export function App() {
                 <option value="online">在线语音转写</option>
               </select>
             </label>
+            <section className="local-media-batch">
+              <div className="local-media-batch-heading">
+                <span><strong>已下载媒体批量队列</strong><small>只导入你本机已有的文件，不从平台批量下载</small></span>
+                <button disabled={!vault || importing} onClick={() => void prepareLocalMediaBatch()} type="button">
+                  {localMediaBatch ? '重新选择' : '批量选择'}
+                </button>
+              </div>
+              {localMediaBatch?.id && <label className="local-media-batch-default">
+                整批默认归属
+                <select disabled={importing} onChange={(event) => applyLocalMediaBatchDefault(event.target.value)} value={localMediaBatchDefault}>
+                  <option value="auto">优先采用逐项自动建议</option>
+                  <option value="personal">全部放入个人知识包</option>
+                  <optgroup label="全部指定给已关注博主">
+                    {localMediaBatch.creators.map((creator) => (
+                      <option key={creator.id} value={`creator:${creator.id}`}>{creator.title}</option>
+                    ))}
+                  </optgroup>
+                </select>
+              </label>}
+              {localMediaBatch?.items.map((item) => (
+                <article className="local-media-batch-item" key={item.id}>
+                  <strong title={item.fileName}>{item.fileName}</strong>
+                  <small>{(item.byteLength / 1024 / 1024).toFixed(1)} MB</small>
+                  <label>
+                    知识包归属
+                    <select
+                      disabled={importing}
+                      onChange={(event) => setLocalMediaBatchAssociations((current) => ({
+                        ...current,
+                        [item.id]: event.target.value,
+                      }))}
+                      value={localMediaBatchAssociations[item.id] ?? ''}
+                    >
+                      <option value="">个人知识包（不关联博主）</option>
+                      {item.matches.length > 0 && <optgroup label="自动匹配到具体视频">
+                        {item.matches.map((match, index) => (
+                          <option key={`${match.creatorId}:${match.creatorEntryId}`} value={`match:${String(index)}`}>
+                            {match.creatorTitle} · {match.entryTitle} · {match.matchKind === 'platform-id' ? `视频 ID ${match.mediaId}` : '标题完全一致'}
+                          </option>
+                        ))}
+                      </optgroup>}
+                      <optgroup label="手动指定已关注博主">
+                        {localMediaBatch.creators.map((creator) => (
+                          <option key={creator.id} value={`creator:${creator.id}`}>{creator.title}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </label>
+                  {item.matches.length === 0 && <small>没有可靠的自动匹配；可以直接选择已关注博主。</small>}
+                </article>
+              ))}
+              {localMediaBatch?.id && <div className="local-media-batch-actions">
+                <button disabled={importing || (
+                  transcriptionExecutionTarget === 'local'
+                    ? !selectedModel || !mediaSettings?.ffmpeg.available || !mediaSettings.whisper.available
+                    : !cloudTranscriptionSettings?.configured || !cloudTranscriptionSettings.credentialAvailable || !mediaSettings?.ffmpeg.available
+                )} onClick={() => void startLocalMediaBatch()} type="button">
+                  {importing ? '正在复制并入队…' : `确认 ${localMediaBatch.items.length} 个文件并加入队列`}
+                </button>
+                <button disabled={importing} onClick={() => { setLocalMediaBatch(null); setLocalMediaBatchAssociations({}); setLocalMediaBatchDefault('auto'); }} type="button">取消预览</button>
+              </div>}
+            </section>
             <div className="tool-row">
               <span><strong>yt-dlp</strong><small>{mediaSettings?.ytDlp.version ?? '未配置（平台分享链接需要）'}</small></span>
               <button onClick={() => void chooseMediaTool('yt-dlp')}>{mediaSettings?.ytDlp.available ? '更换' : '选择'}</button>
@@ -1677,11 +1867,15 @@ export function App() {
               </button>
               {!mediaSettings?.ffmpeg.available && <small className="model-help-note">请先切回本地转录配置 FFmpeg，用于字幕检测和受控音频分块。</small>}
             </>}
-            {mediaJobs.slice(0, 3).map((job) => (
+            {mediaJobs.length > 0 && <div className="import-divider"><span>转录任务队列</span></div>}
+            {mediaJobs.slice(0, 50).map((job) => (
               <div className="job-row" key={job.id}>
+                <strong className="job-title" title={job.title}>{job.title}</strong>
                 <span>{job.stage}</span><progress max="1" value={job.progress} />
+                <small>{job.executionTarget === 'local' ? '本地 Whisper' : '在线转录'}{job.creatorTitle ? ` · ${job.creatorTitle}` : ' · 个人知识包'}{job.batchId ? ' · 批量队列' : ''}</small>
                 <small>{job.chunkCount ? `${job.completedChunks}/${job.chunkCount} 分块` : `第 ${job.attempts} 次运行`}</small>
                 {job.error && <small>{job.error}</small>}
+                {job.canCancel && <button disabled={importing} onClick={() => void cancelMediaJob(job.id)}>停止此任务</button>}
                 {job.canRetry && <button disabled={importing} onClick={() => void retryMediaJob(job.id)}>继续</button>}
                 {job.canDelete && <button disabled={importing} onClick={() => void deleteMediaJob(job.id)}>删除任务</button>}
               </div>

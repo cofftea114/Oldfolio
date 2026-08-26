@@ -56,6 +56,11 @@ export interface MediaTranscriptionRuntimeOptions {
   readonly signal?: AbortSignal;
 }
 
+export interface QueuedMediaTranscription {
+  readonly jobId: string;
+  readonly assetPath: string;
+}
+
 function modelById(models: readonly InstalledLocalModel[], id: string): InstalledLocalModel {
   const model = models.find((candidate) => candidate.id === id);
   if (!model) throw new Error(`本机未安装模型：${id}`);
@@ -252,13 +257,13 @@ export async function resumeMediaTranscription(
   }
 }
 
-export async function transcribeMediaFile(
+export async function queueMediaTranscription(
   repository: VaultRepository,
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
   input: TranscribeMediaFileInput,
-  options: MediaTranscriptionRuntimeOptions = {},
-): Promise<TranscribeMediaFileResult> {
+  batch?: { readonly id: string; readonly itemId: string },
+): Promise<QueuedMediaTranscription> {
   const config = await deviceConfig.load();
   if (!config.ffmpegPath || !config.whisperPath) throw new Error('请先配置 FFmpeg 与 whisper-cli。');
   const model = modelById(config.models, input.modelId);
@@ -278,7 +283,19 @@ export async function transcribeMediaFile(
       ...(input.creatorId ? { creatorId: input.creatorId } : {}),
       ...(input.creatorTitle ? { creatorTitle: input.creatorTitle } : {}),
       ...(input.creatorEntryId ? { creatorEntryId: input.creatorEntryId } : {}),
+      ...(batch ? { batchId: batch.id, batchItemId: batch.itemId } : {}),
     },
   });
-  return resumeMediaTranscription(repository, jobs, deviceConfig, job.id, options);
+  return { jobId: job.id, assetPath: asset.vaultPath };
+}
+
+export async function transcribeMediaFile(
+  repository: VaultRepository,
+  jobs: MediaJobStore,
+  deviceConfig: MediaDeviceConfigStore,
+  input: TranscribeMediaFileInput,
+  options: MediaTranscriptionRuntimeOptions = {},
+): Promise<TranscribeMediaFileResult> {
+  const queued = await queueMediaTranscription(repository, jobs, deviceConfig, input);
+  return resumeMediaTranscription(repository, jobs, deviceConfig, queued.jobId, options);
 }

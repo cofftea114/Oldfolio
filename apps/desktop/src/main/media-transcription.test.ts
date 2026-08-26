@@ -7,7 +7,7 @@ import { MediaDeviceConfigStore, MediaJobStore, type ProcessRunner } from '@oldf
 import { parseOkfDocument } from '@oldfolio/okf';
 import { VaultRepository } from '@oldfolio/vault';
 
-import { resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
+import { queueMediaTranscription, resumeMediaTranscription, transcribeMediaFile } from './media-transcription.js';
 
 const roots: string[] = [];
 
@@ -45,7 +45,7 @@ describe('desktop local media transcription', () => {
       }],
     });
     const calls: string[][] = [];
-    const result = await transcribeMediaFile(vault, jobs, device, {
+    const queued = await queueMediaTranscription(vault, jobs, device, {
       mediaPath,
       vaultRoot,
       modelId: 'tiny',
@@ -55,7 +55,13 @@ describe('desktop local media transcription', () => {
       creatorId: 'creator-0123456789abcdef',
       creatorTitle: '测试博主',
       creatorEntryId: 'yt:video:one',
-    }, {
+    }, { id: 'batch-1', itemId: 'item-1' });
+    expect(await jobs.get(queued.jobId)).toMatchObject({
+      stage: 'queued',
+      request: { batchId: 'batch-1', batchItemId: 'item-1' },
+    });
+    expect(calls).toEqual([]);
+    const result = await resumeMediaTranscription(vault, jobs, device, queued.jobId, {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       run: async (request) => {
         calls.push([...request.args]);

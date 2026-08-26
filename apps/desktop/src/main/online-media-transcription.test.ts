@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OnlineAIConfigStore, OnlineAIService, SessionSecretStore } from './online-ai.js';
 import { CloudTranscriptionConfigStore, CloudTranscriptionService } from './cloud-transcription.js';
-import { transcribeCloudMediaFile, transcribeOnlineMediaUrl } from './online-media-transcription.js';
+import {
+  queueCloudMediaTranscription,
+  resumeOnlineMediaTranscription,
+  transcribeOnlineMediaUrl,
+} from './online-media-transcription.js';
 
 const roots: string[] = [];
 
@@ -124,9 +128,15 @@ describe('desktop online media transcription', () => {
     );
     await cloudTranscription.configure({ providerId: 'openai-compatible', model: 'transcribe-model' });
 
-    const result = await transcribeCloudMediaFile(vault, jobs, device, cloudTranscription, {
+    const queued = await queueCloudMediaTranscription(vault, jobs, device, cloudTranscription, {
       mediaPath, language: 'zh',
-    }, {
+    }, { id: 'batch-cloud-1', itemId: 'item-cloud-1' });
+    expect(await jobs.get(queued.jobId)).toMatchObject({
+      stage: 'queued',
+      request: { batchId: 'batch-cloud-1', batchItemId: 'item-cloud-1' },
+    });
+    expect(transcriptionFetch).not.toHaveBeenCalled();
+    const result = await resumeOnlineMediaTranscription(vault, jobs, device, cloudTranscription, queued.jobId, {
       now: () => new Date('2026-08-16T09:00:00.000Z'),
       run: async (request) => {
         if (request.executablePath.includes('ffprobe')) {

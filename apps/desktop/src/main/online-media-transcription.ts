@@ -18,7 +18,12 @@ import {
 import type { AITranscriptionResult, SourceSnapshot } from '@oldfolio/domain';
 import type { VaultRepository } from '@oldfolio/vault';
 
-import { resolveVerifiedAsset, validatedMediaBundleRoot, type TranscribeMediaFileResult } from './media-transcription.js';
+import {
+  resolveVerifiedAsset,
+  validatedMediaBundleRoot,
+  type QueuedMediaTranscription,
+  type TranscribeMediaFileResult,
+} from './media-transcription.js';
 import type { CloudTranscriptionService } from './cloud-transcription.js';
 import { downloadRemoteMediaAsset } from './remote-media.js';
 import { writeConceptOnce } from './write-concept.js';
@@ -79,17 +84,17 @@ export async function transcribeOnlineMediaUrl(
   return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
 }
 
-export async function transcribeCloudMediaFile(
+export async function queueCloudMediaTranscription(
   repository: VaultRepository,
   jobs: MediaJobStore,
   deviceConfig: MediaDeviceConfigStore,
   cloudTranscription: CloudTranscriptionService,
   input: { readonly mediaPath: string; readonly importedFrom?: string; readonly language?: string } & CreatorMediaTargetInput,
-  options: OnlineMediaTranscriptionOptions = {},
-): Promise<TranscribeMediaFileResult> {
+  batch?: { readonly id: string; readonly itemId: string },
+): Promise<QueuedMediaTranscription> {
   const config = await deviceConfig.load();
   if (!config.ffmpegPath) throw new Error('请先配置 FFmpeg，用于字幕检测和受控音频分块。');
-  const runtime = await cloudTranscription.runtime(options.signal);
+  const runtime = await cloudTranscription.runtime();
   const asset = await importMediaAsset(input.mediaPath, repository.root);
   const job = await jobs.create({
     sourceUri: asset.vaultPath,
@@ -110,9 +115,22 @@ export async function transcribeCloudMediaFile(
       ...(input.creatorId ? { creatorId: input.creatorId } : {}),
       ...(input.creatorTitle ? { creatorTitle: input.creatorTitle } : {}),
       ...(input.creatorEntryId ? { creatorEntryId: input.creatorEntryId } : {}),
+      ...(batch ? { batchId: batch.id, batchItemId: batch.itemId } : {}),
     },
   });
-  return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, job.id, options);
+  return { jobId: job.id, assetPath: asset.vaultPath };
+}
+
+export async function transcribeCloudMediaFile(
+  repository: VaultRepository,
+  jobs: MediaJobStore,
+  deviceConfig: MediaDeviceConfigStore,
+  cloudTranscription: CloudTranscriptionService,
+  input: { readonly mediaPath: string; readonly importedFrom?: string; readonly language?: string } & CreatorMediaTargetInput,
+  options: OnlineMediaTranscriptionOptions = {},
+): Promise<TranscribeMediaFileResult> {
+  const queued = await queueCloudMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, input);
+  return resumeOnlineMediaTranscription(repository, jobs, deviceConfig, cloudTranscription, queued.jobId, options);
 }
 
 export async function resumeOnlineMediaTranscription(

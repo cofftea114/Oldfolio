@@ -34,6 +34,8 @@ export interface LocalMediaTranscriptionRequest {
   readonly creatorId?: string;
   readonly creatorTitle?: string;
   readonly creatorEntryId?: string;
+  readonly batchId?: string;
+  readonly batchItemId?: string;
 }
 
 export interface OnlineMediaTranscriptionRequest {
@@ -52,6 +54,8 @@ export interface OnlineMediaTranscriptionRequest {
   readonly creatorId?: string;
   readonly creatorTitle?: string;
   readonly creatorEntryId?: string;
+  readonly batchId?: string;
+  readonly batchItemId?: string;
 }
 
 export type MediaTranscriptionRequest = LocalMediaTranscriptionRequest | OnlineMediaTranscriptionRequest;

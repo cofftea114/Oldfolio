@@ -183,6 +183,20 @@ describe('persistent media jobs', () => {
     await expect(store.deleteFailed(queued.id)).rejects.toThrow(/failed/u);
     await expect(store.get(queued.id)).resolves.toMatchObject({ id: queued.id, stage: 'queued' });
   });
+
+  it('cancels an individual queued job and then allows its metadata to be deleted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oldfolio-media-job-cancel-'));
+    roots.push(root);
+    const store = new MediaJobStore(root);
+    await store.initialize();
+    const first = await store.create({ sourceUri: 'assets/media/first.mp4', sourceHash: sha256('first') });
+    const second = await store.create({ sourceUri: 'assets/media/second.mp4', sourceHash: sha256('second') });
+
+    await expect(store.cancel(first.id)).resolves.toMatchObject({ id: first.id, stage: 'cancelled' });
+    await expect(store.get(second.id)).resolves.toMatchObject({ id: second.id, stage: 'queued' });
+    await expect(store.deleteTerminal(first.id)).resolves.toMatchObject({ id: first.id, stage: 'cancelled' });
+    await expect(store.get(first.id)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('local media tool boundary', () => {

@@ -59,6 +59,19 @@ claim that the planned 9–12 month v1 is complete.
 - Persist media job requests and SHA-256-verified chunk checkpoints under the non-synchronized
   cache, requeue interrupted work at startup, expose retry controls for queued/failed jobs, and allow
   confirmed deletion of failed job metadata and intermediate cache without deleting Vault assets or notes.
+- Batch-select up to 100 already-downloaded local media files for local Whisper or configured online
+  transcription. The main process keeps source paths out of the renderer, validates that files remain
+  unchanged between preview and confirmation, and copies every accepted file into content-addressed
+  Vault assets before returning. YouTube, Bilibili, and Douyin IDs in filenames are matched exactly
+  against followed creator history; filenames containing only the normalized exact video title also
+  produce suggestions. ID matches are ranked first, ambiguous same-title matches remain explicit, and
+  every destination is user-editable. A whole batch can be assigned directly to any currently followed
+  creator, with per-file overrides. Creator-only assignments route output to that Creator Bundle without
+  inventing a history-entry ID, and the main process revalidates the current subscription before queueing. All accepted
+  jobs are persisted before a single-worker background queue starts; one failure does not block later
+  files, interrupted queued batches resume when the Vault is reopened, and each queued or running batch
+  item can be stopped independently. Cancelled and failed task metadata can then be deleted without
+  deleting imported Vault media or generated notes.
 - Configure FFmpeg (including the adjacent `ffprobe`) and `whisper-cli` per device, import
   user-approved GGML models with streaming
   SHA-256 verification, copy selected media into content-addressed Vault assets, and run the local
@@ -167,6 +180,6 @@ claim that the planned 9–12 month v1 is complete.
 - Processing transcripts above the current 200,000-character safety limit, multi-turn conversational memory,
   and one-click batch concept extraction across multiple transcripts.
 
-The next product increment should prioritize batch import of already-downloaded local media, followed
-by a persistent transcription and summary queue. Filename video IDs and user confirmation can bind
-local files back to Creator history entries; Oldfolio should not add a bulk platform downloader.
+The next product increment should extend the persistent media queue with explicitly approved summary
+jobs. Summary execution must retain the existing host/payload/cost disclosure, support local and online
+providers independently from transcription, and never turn creator tracking into a bulk platform downloader.

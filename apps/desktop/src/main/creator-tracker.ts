@@ -83,6 +83,12 @@ export interface CreatorTitleGraphSummary {
   readonly edges: readonly CreatorTitleGraphEdge[];
 }
 
+export interface CreatorHistoryCatalogSummary {
+  readonly creatorId: string;
+  readonly creatorTitle: string;
+  readonly entries: readonly CreatorFeedEntrySummary[];
+}
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -387,6 +393,14 @@ export class CreatorTrackerService {
         return 0;
       });
     });
+  }
+
+  historyCatalog(): Promise<readonly CreatorHistoryCatalogSummary[]> {
+    return this.run(async () => (await this.load()).subscriptions.map((item) => ({
+      creatorId: item.id,
+      creatorTitle: item.title,
+      entries: item.entries,
+    })));
   }
 
   generateTitleGraph(id: string): Promise<CreatorTitleGraphSummary> {
