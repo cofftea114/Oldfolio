@@ -51,8 +51,9 @@ claim that the planned 9–12 month v1 is complete.
   phrase similarity; repeated creator boilerplate is excluded and each title has at most four strong
   relations. The complete graph is validated and stored as JSON Canvas under the owning Creator
   bundle, linked from its index, and recorded in its maintenance log. The desktop renders up to 2,000
-  nodes in an interactive force-directed Canvas knowledge star map with zoom, pan, node dragging,
-  search, local-neighborhood focus, and double-click navigation to the original entry.
+  nodes in an interactive Canvas knowledge star map with deterministic spiral, barred-spiral,
+  elliptical, and star-cluster layouts. Disconnected topic components become satellite galaxies;
+  zoom, pan, node dragging, search, local-neighborhood focus, and double-click navigation remain available.
 - Import local text and caption sources through the reusable connector API.
 - Import SRT/WebVTT captions from the desktop UI, parse timestamped and speaker-attributed segments,
   and compile strict OKF `Transcript` concepts linked back to the local source time position.

@@ -25,6 +25,33 @@ const graph: CreatorTitleGraphSummary = {
   ],
 };
 
+function largeGraph(nodeCount = 120): CreatorTitleGraphSummary {
+  const nodes = Array.from({ length: nodeCount }, (_, index) => ({
+    id: index.toString(16).padStart(16, '0'),
+    title: `知识主题 ${String(index)}`,
+    x: 0,
+    y: 0,
+    width: 360,
+    height: 160,
+  }));
+  const edges = nodes.flatMap((node, index) => {
+    const next = nodes[index + 1];
+    const related = nodes[index + 7];
+    return [
+      ...(next ? [{ id: `next-${String(index)}`, fromNode: node.id, toNode: next.id, score: 0.82, terms: ['主题'] }] : []),
+      ...(related && index % 3 === 0 ? [{ id: `related-${String(index)}`, fromNode: node.id, toNode: related.id, score: 0.65, terms: ['知识'] }] : []),
+    ];
+  });
+  return {
+    ...graph,
+    nodeCount: nodes.length,
+    edgeCount: edges.length,
+    relatedNodeCount: nodes.length,
+    nodes,
+    edges,
+  };
+}
+
 describe('creator knowledge star layout', () => {
   it('places every title deterministically at finite coordinates', () => {
     const first = buildCreatorStarLayout(graph);
@@ -52,5 +79,37 @@ describe('creator knowledge star layout', () => {
     ]);
     expect(isolated?.degree).toBe(0);
     expect(isolated?.component).not.toBe(hub?.component);
+  });
+
+  it.each(['spiral', 'barred', 'elliptical', 'cluster'] as const)(
+    'builds a deterministic %s galaxy without losing graph relationships',
+    (mode) => {
+      const first = buildCreatorStarLayout(graph, mode);
+      const second = buildCreatorStarLayout(graph, mode);
+
+      expect(first.mode).toBe(mode);
+      expect(first.edges).toEqual(graph.edges);
+      expect(first.points.map(({ id, x, y }) => ({ id, x, y }))).toEqual(
+        second.points.map(({ id, x, y }) => ({ id, x, y })),
+      );
+      expect(first.points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))).toBe(true);
+    },
+  );
+
+  it('uses visibly different geometry for spiral and elliptical galaxies', () => {
+    const spiral = buildCreatorStarLayout(graph, 'spiral');
+    const elliptical = buildCreatorStarLayout(graph, 'elliptical');
+
+    expect(spiral.points.map(({ x, y }) => [x, y])).not.toEqual(
+      elliptical.points.map(({ x, y }) => [x, y]),
+    );
+  });
+
+  it.each(['spiral', 'barred'] as const)('keeps the %s silhouette after relationship settling', (mode) => {
+    const layout = buildCreatorStarLayout(largeGraph(), mode);
+    const displacement = layout.points.map((point) => Math.hypot(point.x - point.anchorX, point.y - point.anchorY));
+
+    expect(Math.max(...displacement)).toBeLessThan(24);
+    expect(displacement.reduce((sum, value) => sum + value, 0) / displacement.length).toBeLessThan(10);
   });
 });

@@ -35,8 +35,9 @@ bundles, media-derived notes, and user-controlled AI providers.
 - Creator history can be compiled offline into a deterministic knowledge star map. Related titles are
   connected by straight, non-directional edges, density is bounded for histories up to 2,000 entries,
   and the complete graph is saved as a standard JSON Canvas file inside the Creator bundle. The desktop
-  renders every title on a force-directed Canvas: node size reflects connectivity, and users can pan,
-  zoom, drag, search, focus neighboring titles, or double-click through to the original entry.
+  renders every title on a Canvas with selectable spiral, barred-spiral, elliptical, and star-cluster
+  geometry. Disconnected topics form satellite galaxies; node size reflects connectivity, and users can
+  pan, zoom, drag, search, focus neighboring titles, or double-click through to the original entry.
 - Desktop SRT/WebVTT import into timestamp-linked OKF Transcript notes, backed by resumable media jobs.
 - Public HTTPS audio/video direct-link import with bounded streaming download, embedded-subtitle
   preference, resumable online speech transcription, and explicit provider disclosure.

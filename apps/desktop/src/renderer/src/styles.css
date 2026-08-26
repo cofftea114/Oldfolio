@@ -106,23 +106,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .creator-title-graph-heading strong { font: 600 17px/1.3 var(--font-editor); }
 .creator-title-graph-heading small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .source-import .creator-title-graph-close { width: auto; margin: 0; padding: 6px 11px; background: #e5e9e5; color: var(--accent); border: 1px solid #ccd7d0; }
-.creator-title-graph-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background-color: #f6f6f3; background-image: radial-gradient(rgb(122 121 147 / 30%) .75px, transparent .75px); background-size: 18px 18px; }
+.creator-title-graph-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid #232842; border-radius: 9px; background: #04050f; }
 .creator-title-graph-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .creator-title-graph-stage canvas:active { cursor: grabbing; }
-.creator-title-graph-stage canvas:focus-visible { outline: 2px solid #6f50a9; outline-offset: -3px; }
+.creator-title-graph-stage canvas:focus-visible { outline: 2px solid #8ea2ff; outline-offset: -3px; }
 .creator-title-graph-lens, .creator-title-graph-search, .creator-title-graph-controls { position: absolute; z-index: 1; backdrop-filter: blur(10px); }
-.creator-title-graph-lens { top: 18px; left: 18px; width: 210px; padding: 12px 13px; border: 1px solid rgb(118 99 160 / 22%); border-radius: 10px; background: rgb(251 251 248 / 86%); box-shadow: 0 5px 20px rgb(72 55 106 / 8%); pointer-events: none; }
+.creator-title-graph-lens { top: 18px; left: 18px; width: 210px; padding: 12px 13px; border: 1px solid rgb(142 162 255 / 20%); border-radius: 10px; background: rgb(9 12 26 / 78%); box-shadow: 0 5px 24px rgb(2 3 10 / 45%); pointer-events: none; }
 .creator-title-graph-lens small, .creator-title-graph-lens strong, .creator-title-graph-lens span { display: block; }
-.creator-title-graph-lens small { color: #765ea4; font-size: 8px; font-weight: 760; letter-spacing: .11em; }
-.creator-title-graph-lens strong { margin-top: 4px; font: 600 13px/1.4 var(--font-editor); overflow-wrap: anywhere; }
-.creator-title-graph-lens span, .creator-title-graph-lens p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
-.creator-title-graph-lens hr { height: 1px; margin: 9px 0; border: 0; background: rgb(118 99 160 / 15%); }
+.creator-title-graph-lens small { color: #9aa8ec; font-size: 8px; font-weight: 760; letter-spacing: .11em; }
+.creator-title-graph-lens strong { margin-top: 4px; color: #eef0ff; font: 600 13px/1.4 var(--font-editor); overflow-wrap: anywhere; }
+.creator-title-graph-lens span, .creator-title-graph-lens p { margin: 3px 0 0; color: #969ec6; font-size: 9px; line-height: 1.5; }
+.creator-title-graph-lens hr { height: 1px; margin: 9px 0; border: 0; background: rgb(142 162 255 / 15%); }
 .creator-title-graph-search { top: 18px; left: 50%; width: min(360px, 38%); transform: translateX(-50%); }
-.source-import .creator-title-graph-search input { height: 34px; padding: 0 12px; border-color: rgb(118 99 160 / 26%); border-radius: 18px; background: rgb(255 255 253 / 91%); box-shadow: 0 4px 16px rgb(72 55 106 / 9%); font-size: 10px; }
-.creator-title-graph-controls { right: 18px; bottom: 18px; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid rgb(118 99 160 / 20%); border-radius: 8px; background: rgb(251 251 248 / 88%); box-shadow: 0 4px 16px rgb(72 55 106 / 8%); }
-.source-import .creator-title-graph-controls button { width: auto; min-width: 29px; margin: 0; padding: 5px 8px; border: 0; background: transparent; color: #5f477f; }
-.source-import .creator-title-graph-controls button:hover { background: #eee8f6; }
-.creator-title-graph-controls span { min-width: 38px; color: var(--muted); font-size: 9px; text-align: center; }
+.source-import .creator-title-graph-search input { height: 34px; padding: 0 12px; border-color: rgb(142 162 255 / 28%); border-radius: 18px; background: rgb(9 12 26 / 84%); box-shadow: 0 4px 18px rgb(2 3 10 / 40%); color: #e6e9fb; font-size: 10px; }
+.source-import .creator-title-graph-search input::placeholder { color: #767ea6; }
+.creator-title-graph-controls { right: 18px; bottom: 18px; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid rgb(142 162 255 / 20%); border-radius: 8px; background: rgb(9 12 26 / 82%); box-shadow: 0 4px 18px rgb(2 3 10 / 42%); }
+.creator-title-graph-controls label { display: flex; }
+.creator-title-graph-controls select { height: 29px; padding: 0 25px 0 9px; border: 0; border-right: 1px solid rgb(142 162 255 / 16%); border-radius: 5px 0 0 5px; background-color: transparent; color: #c2c9f2; font: 600 9px/1 var(--font-ui); cursor: pointer; }
+.creator-title-graph-controls select:focus-visible { outline: 2px solid #8ea2ff; outline-offset: -2px; }
+.source-import .creator-title-graph-controls button { width: auto; min-width: 29px; margin: 0; padding: 5px 8px; border: 0; background: transparent; color: #c2c9f2; }
+.source-import .creator-title-graph-controls button:hover { background: rgb(142 162 255 / 14%); }
+.creator-title-graph-controls span { min-width: 38px; color: #969ec6; font-size: 9px; text-align: center; }
 .creator-title-graph-footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; color: var(--muted); font-size: 9px; }
 .creator-title-graph-footer span:last-child { max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .import-divider { display: flex; align-items: center; gap: 7px; margin: 9px 0 0; color: var(--muted); font-size: 9px; }
